@@ -4,11 +4,12 @@ export interface Task {
   id: string;
   prompt: string;
   status: TaskStatus;
+  targetUrl?: string;
   error?: string;
 }
 
 export type MessageType = 
-  | { type: 'ADD_TASK'; payload: string }
+  | { type: 'ADD_TASK'; payload: { prompt: string; targetUrl?: string } }
   | { type: 'REMOVE_TASK'; payload: string }
   | { type: 'CLEAR_QUEUE' }
   | { type: 'START_QUEUE' }

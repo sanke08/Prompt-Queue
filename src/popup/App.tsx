@@ -11,7 +11,10 @@ import {
   RotateCcw,
   Command,
   Keyboard,
-  X
+  X,
+  Link,
+  Link2,
+  Unlink
 } from 'lucide-react';
 import type { QueueState, Task } from '../utils/messaging';
 import { sendMessageToBackground } from '../utils/messaging';
@@ -21,11 +24,21 @@ const App: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [isLockedToTab, setIsLockedToTab] = useState(false);
+  const [currentTab, setCurrentTab] = useState<{ id: number, url: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     // Initial fetch
     sendMessageToBackground({ type: 'GET_QUEUE_STATE' }).then(setState);
+
+    // Get current tab info
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      if (tab?.url && (tab.url.includes('chatgpt.com') || tab.url.includes('chat.openai.com'))) {
+        setCurrentTab({ id: tab.id!, url: tab.url });
+      }
+    });
 
     // Listen for updates from background
     const listener = (message: any) => {
@@ -94,6 +107,12 @@ const App: React.FC = () => {
             break;
         }
       }
+
+      // Alt + L: Toggle Lock to Tab
+      if (e.altKey && e.code === 'KeyL') {
+        e.preventDefault();
+        if (currentTab) setIsLockedToTab(prev => !prev);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -105,7 +124,11 @@ const App: React.FC = () => {
 
   const handleAddPrompt = async () => {
     if (!prompt.trim()) return;
-    await sendMessageToBackground({ type: 'ADD_TASK', payload: prompt });
+    const targetUrl = isLockedToTab ? currentTab?.url : undefined;
+    await sendMessageToBackground({ 
+      type: 'ADD_TASK', 
+      payload: { prompt, targetUrl } 
+    });
     setPrompt('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -181,6 +204,7 @@ const App: React.FC = () => {
               { keys: ['J', 'K'], desc: 'Navigate queue' },
               { keys: ['Delete'], desc: 'Delete selected task' },
               { keys: ['?'], desc: 'Show this help' },
+              { keys: ['Alt', 'L'], desc: 'Toggle Lock to Current Tab' },
               { keys: ['Enter'], desc: 'Add prompt (from input)' },
               { keys: ['Shift', 'Enter'], desc: 'New line in input' },
               { keys: ['Esc'], desc: 'Back / Clear input' },
@@ -208,6 +232,20 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Input Area */}
         <div className="space-y-2">
+          <div className="flex justify-between items-center px-1">
+            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">New Task</span>
+            {currentTab && (
+              <button 
+                onClick={() => setIsLockedToTab(!isLockedToTab)}
+                className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full transition-all ${
+                  isLockedToTab ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-chatgpt-hover text-gray-400 border border-transparent'
+                }`}
+              >
+                {isLockedToTab ? <Link2 className="w-3 h-3" /> : <Unlink className="w-3 h-3" />}
+                {isLockedToTab ? 'LOCKED TO CURRENT CHAT' : 'TARGET: ANY CHAT'}
+              </button>
+            )}
+          </div>
           <textarea
             ref={textareaRef}
             value={prompt}
@@ -217,7 +255,7 @@ const App: React.FC = () => {
               e.target.style.height = `${e.target.scrollHeight}px`;
             }}
             placeholder="Enter prompt..."
-            className="w-full bg-chatgpt-sidebar border border-chatgpt-border rounded-lg p-3 text-sm focus:outline-none focus:ring-1 focus:ring-green-500 min-h-[80px] max-h-[200px] resize-none transition-all"
+            className="w-full bg-chatgpt-sidebar border border-chatgpt-border rounded-lg p-3 text-sm focus:outline-none focus:ring-1 focus:ring-green-500 min-h-[80px] max-h-[200px] resize-none transition-all shadow-inner"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -269,6 +307,12 @@ const App: React.FC = () => {
                       <p className="text-sm line-clamp-3 text-gray-200 break-words leading-relaxed">
                         {task.prompt}
                       </p>
+                      {task.targetUrl && (
+                        <div className="flex items-center gap-1 text-[9px] text-gray-500 mt-1 truncate">
+                          <Link className="w-2.5 h-2.5" />
+                          <span className="truncate max-w-[150px]">{task.targetUrl.split('/').pop() || 'Specific Chat'}</span>
+                        </div>
+                      )}
                       {task.error && (
                         <p className="text-[10px] text-red-400 mt-1 italic">{task.error}</p>
                       )}

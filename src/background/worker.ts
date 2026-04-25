@@ -43,7 +43,7 @@ export class Worker {
     try {
       await this.queueManager.updateTask(task.id, { status: 'running' });
       
-      const tab = await this.ensureChatGPTTab();
+      const tab = await this.ensureChatGPTTab(task.targetUrl);
       if (!tab.id) throw new Error('No ChatGPT tab found');
 
       const response = await sendMessageToTab(tab.id, { 
@@ -98,17 +98,41 @@ export class Worker {
     }
   }
 
-  private async ensureChatGPTTab(): Promise<chrome.tabs.Tab> {
+  private async ensureChatGPTTab(targetUrl?: string): Promise<chrome.tabs.Tab> {
+    // If a specific URL is required, prioritize finding or opening that exact URL
+    if (targetUrl) {
+      const tabs = await chrome.tabs.query({ url: targetUrl });
+      if (tabs.length > 0) {
+        const tab = tabs[0];
+        await chrome.tabs.update(tab.id!, { active: true });
+        return tab;
+      }
+      // If the specific URL isn't open, we need to navigate an existing ChatGPT tab or open a new one
+    }
+
     const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*', 'https://chat.openai.com/*'] });
     
     if (tabs.length > 0) {
       const tab = tabs[0];
       await chrome.tabs.update(tab.id!, { active: true });
+      
+      // If we have a targetUrl but the current tab is elsewhere, navigate it
+      if (targetUrl && tab.url !== targetUrl) {
+        await chrome.tabs.update(tab.id!, { url: targetUrl });
+        return new Promise((resolve) => {
+          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+            if (tabId === tab.id && info.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(listener);
+              resolve(tab);
+            }
+          });
+        });
+      }
       return tab;
     }
 
     // Open new tab if none found
-    const tab = await chrome.tabs.create({ url: 'https://chatgpt.com/' });
+    const tab = await chrome.tabs.create({ url: targetUrl || 'https://chatgpt.com/' });
     
     // Wait for tab to load
     return new Promise((resolve) => {

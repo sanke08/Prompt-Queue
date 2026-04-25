@@ -17,10 +17,11 @@ export class QueueManager {
     return this.state;
   }
 
-  async addTask(prompt: string) {
+  async addTask(payload: { prompt: string; targetUrl?: string }) {
     const newTask: Task = {
       id: Math.random().toString(36).substring(7),
-      prompt,
+      prompt: payload.prompt,
+      targetUrl: payload.targetUrl,
       status: 'pending',
     };
     this.state.tasks.push(newTask);
