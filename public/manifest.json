@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Queue Automator",
+  "version": "1.0.0",
+  "description": "Automate sending multiple prompts to ChatGPT sequentially using a queue system.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "ChatGPT Queue"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}
