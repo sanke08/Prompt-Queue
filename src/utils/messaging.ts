@@ -21,6 +21,7 @@ export interface Project {
   isRunning: boolean;
   currentTaskId: string | null;
   createdAt: number;
+  targetUrl?: string;
 }
 
 export interface QueueState {
@@ -43,7 +44,8 @@ export type MessageType =
   | { type: 'CREATE_PROJECT'; payload: { name: string } }
   | { type: 'SWITCH_PROJECT'; payload: string }
   | { type: 'DELETE_PROJECT'; payload: string }
-  | { type: 'UPDATE_PROJECT_NAME'; payload: { id: string; name: string } };
+  | { type: 'UPDATE_PROJECT_NAME'; payload: { id: string; name: string } }
+  | { type: 'CLEAR_PROJECT_LOCK'; payload: string };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);

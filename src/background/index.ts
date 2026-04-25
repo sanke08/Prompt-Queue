@@ -62,6 +62,9 @@ async function handleMessage(message: MessageType) {
     case 'UPDATE_PROJECT_NAME':
       await queueManager.updateProjectName(message.payload.id, message.payload.name);
       return { success: true };
+    case 'CLEAR_PROJECT_LOCK':
+      await queueManager.clearProjectLock(message.payload);
+      return { success: true };
     default:
       return null;
   }

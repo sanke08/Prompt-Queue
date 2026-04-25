@@ -1,6 +1,6 @@
 import type { QueueState, Project } from '../utils/messaging';
 
-const STORAGE_KEY = 'chatgpt_queue_state_v2';
+const STORAGE_KEY = 'prompt_queue_state';
 
 const createDefaultProject = (): Project => ({
   id: 'default',

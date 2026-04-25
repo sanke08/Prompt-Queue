@@ -292,6 +292,16 @@ const App: React.FC = () => {
               />
             </button>
 
+            {activeProject?.targetUrl && (
+               <button 
+                onClick={() => sendMessageToBackground({ type: 'CLEAR_PROJECT_LOCK', payload: activeProject.id })}
+                className="absolute -right-2 -top-1 w-4 h-4 bg-white text-black rounded-full flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors shadow-lg z-10"
+                title="Clear Project Sticky Chat"
+               >
+                 <Link2 className="w-2.5 h-2.5" />
+               </button>
+            )}
+
             {isProjectMenuOpen && (
               <>
                 <div
@@ -322,6 +332,7 @@ const App: React.FC = () => {
                           >
                             {p.name}
                           </span>
+                          {p.targetUrl && <Link2 className="w-2.5 h-2.5 text-mono-secondary" />}
                         </button>
                         <button
                           onClick={() => handleDeleteProject(p.id)}
@@ -479,7 +490,7 @@ const App: React.FC = () => {
           {/* Platform Selector */}
           <div className="flex gap-2">
             {(["chatgpt", "gemini", "claude"] as AIPlatform[]).map((p) => {
-              const isDisabled = isLockedToTab;
+              const isDisabled = isLockedToTab || !!activeProject?.targetUrl;
               return (
                 <button
                   key={p}

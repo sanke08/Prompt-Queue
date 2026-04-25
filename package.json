@@ -1,5 +1,5 @@
 {
-  "name": "ext",
+  "name": "prompt-queue",
   "private": true,
   "version": "0.0.0",
   "type": "module",

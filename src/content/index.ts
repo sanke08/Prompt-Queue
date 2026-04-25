@@ -48,6 +48,12 @@ async function handleExecutePrompt(prompt: string) {
       return { success: false, error: `Could not find input box on ${adapter.name}` };
     }
 
+    // Check if input is empty to avoid overwriting user's active typing
+    const currentText = (input as any).innerText || (input as any).value || "";
+    if (currentText.trim().length > 0) {
+      return { success: false, error: "Input is not empty (User may be typing). Retrying..." };
+    }
+
     adapter.setInputValue(input, prompt);
 
     // Delay to let the framework pick up the value

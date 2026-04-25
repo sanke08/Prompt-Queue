@@ -1,73 +1,116 @@
-# React + TypeScript + Vite
+# Prompt Queue 🤖🚀
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A powerful, professional-grade Chrome Extension designed to automate sequential prompt execution across multiple AI platforms including **ChatGPT**, **Google Gemini**, and **Claude AI**.
 
-Currently, two official plugins are available:
+## ✨ Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Multi-Platform Support**: Seamlessly automate prompts for ChatGPT, Gemini, and Claude.
+- **Sequential Queueing**: Add multiple prompts and let the automator handle them one by one. No more waiting for one response to finish before typing the next.
+- **Project Management**: Organize your work into "Projects" (e.g., "Blog Generation", "Market Research"). Each project has its own independent queue and running state.
+- **Side Panel Integration**: Persists as a sidebar, allowing you to browse or use the AI chat while the automator works in the background.
+- **Smart Routing & Locking**:
+  - **Any Chat**: Runs tasks in the first available tab of the target platform.
+  - **Locked Mode**: Pin a task to a specific browser tab or conversation URL.
+- **Platform Auto-Detection**: Automatically identifies which platform you are on and syncs your settings.
+- **Premium design**: A sleek, monochrome "Studio" aesthetic with smooth animations and dark mode.
+- **Vim-inspired Shortcuts**: Navigate the entire UI without touching your mouse.
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 🛠️ Installation
 
-## Expanding the ESLint configuration
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v18 or higher)
+- [pnpm](https://pnpm.io/) (recommended) or npm
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Setup Steps
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/sanke08/Prompt-Queue.git
+   cd Prompt-Queue
+   ```
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+2. **Install dependencies**:
+   ```bash
+   pnpm install
+   ```
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+3. **Build the extension**:
+   ```bash
+   pnpm build
+   ```
+   This will generate a `dist` folder.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+4. **Load into Chrome**:
+   - Open Chrome and go to `chrome://extensions/`.
+   - Enable **Developer mode** (toggle in the top right).
+   - Click **Load unpacked**.
+   - Select the `dist` folder in the project directory.
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+---
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 🚀 How to Use
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+### 1. Open the Automator
+Click the **Prompt Queue** icon in your Chrome extensions bar. It will open as a persistent **Side Panel**.
+
+### 2. Create a Project
+Click the **Project Selector** (folder icon) in the header to create a new project. Use this to keep different task sets organized.
+
+### 3. Add Prompts
+- Select your target **Platform** (ChatGPT, Gemini, or Claude).
+- Type your prompt in the text area.
+- (Optional) Toggle **LOCKED** to pin the prompt to the current tab/conversation.
+- Press `Enter` or click **Add to Queue**.
+
+### 4. Launch the Worker
+Click the **Launch Worker** button at the bottom. The extension will:
+- Find or open the correct AI tab.
+- Inject the prompt.
+- Wait for the response to complete.
+- Automatically move to the next task.
+
+---
+
+## ⌨️ Keyboard Shortcuts
+
+The UI is optimized for speed with the following shortcuts (Global when input is not focused):
+
+| Key | Action |
+|-----|--------|
+| `S` | Start / Pause / Resume Worker |
+| `C` | Clear the entire project queue |
+| `I` | Focus the prompt input area |
+| `J` / `K` | Navigate up/down the task list |
+| `Delete` | Remove the selected task |
+| `Alt + L` | Toggle "Lock to Current Tab" |
+| `?` | Toggle the Shortcuts help overlay |
+| `Esc` | Clear current input or close overlays |
+| `Enter` | (In Input) Add task to queue |
+| `Shift + Enter` | (In Input) Add a new line |
+
+---
+
+## 🏗️ Architecture
+
+- **`Background Script`**: The brain of the extension.
+  - `QueueManager`: Handles projects, task persistence, and state updates.
+  - `Worker`: Coordinates with browser tabs, manages navigation, and handles retries.
+- **`Content Script`**: The hands.
+  - Detects the active AI platform.
+  - Injects prompts directly into the DOM.
+  - Monitors the UI for "generation complete" states using platform-specific adapters.
+- **`Platform Adapters`**: Specialized logic for different AI UIs.
+  - `ChatGPTAdapter`: Targets standard GPT chat elements.
+  - `GeminiAdapter`: Targets Google's specific Quill editor and stop indicators.
+  - `ClaudeAdapter`: Targets Anthropic's ProseMirror editor and streaming states.
+- **`Popup (Side Panel)`**: A React-based interface built with Vite and Tailwind-style design tokens for a premium experience.
+
+---
+
+## 📄 License
+This project is private and for internal use.
+
+---
+
+*Developed with ❤️ for high-productivity AI workflows.*

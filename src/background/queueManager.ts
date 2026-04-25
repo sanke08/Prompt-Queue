@@ -91,6 +91,16 @@ export class QueueManager {
     return this.activeProject.tasks.find(t => t.status === 'pending');
   }
 
+  async getNextPendingTaskForPlatform(platform: AIPlatform) {
+    // Look for any running project that has a pending task for this platform
+    for (const project of this.state.projects) {
+        if (!project.isRunning || project.isPaused) continue;
+        const task = project.tasks.find(t => t.status === 'pending' && t.platform === platform);
+        if (task) return { task, project };
+    }
+    return null;
+  }
+
   // --- Project Management ---
 
   async createProject(name: string) {
@@ -130,6 +140,20 @@ export class QueueManager {
   async updateProjectName(projectId: string, name: string) {
     this.state.projects = this.state.projects.map(p => 
         p.id === projectId ? { ...p, name } : p
+    );
+    await this.persist();
+  }
+
+  async clearProjectLock(projectId: string) {
+    this.state.projects = this.state.projects.map(p => 
+        p.id === projectId ? { ...p, targetUrl: undefined } : p
+    );
+    await this.persist();
+  }
+
+  async updateProjectTargetUrl(projectId: string, targetUrl: string) {
+    this.state.projects = this.state.projects.map(p => 
+        p.id === projectId ? { ...p, targetUrl } : p
     );
     await this.persist();
   }
