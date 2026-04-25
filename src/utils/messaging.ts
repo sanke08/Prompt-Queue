@@ -1,15 +1,35 @@
 export type TaskStatus = 'pending' | 'running' | 'done' | 'error';
 
+export type AIPlatform = 'chatgpt' | 'gemini' | 'claude';
+
 export interface Task {
   id: string;
   prompt: string;
   status: TaskStatus;
+  platform: AIPlatform;
   targetUrl?: string;
   error?: string;
+  response?: string;
+  completedAt?: number;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  tasks: Task[];
+  isPaused: boolean;
+  isRunning: boolean;
+  currentTaskId: string | null;
+  createdAt: number;
+}
+
+export interface QueueState {
+  projects: Project[];
+  activeProjectId: string;
 }
 
 export type MessageType = 
-  | { type: 'ADD_TASK'; payload: { prompt: string; targetUrl?: string } }
+  | { type: 'ADD_TASK'; payload: { prompt: string; platform: AIPlatform; targetUrl?: string } }
   | { type: 'REMOVE_TASK'; payload: string }
   | { type: 'CLEAR_QUEUE' }
   | { type: 'START_QUEUE' }
@@ -18,15 +38,12 @@ export type MessageType =
   | { type: 'GET_QUEUE_STATE' }
   | { type: 'QUEUE_STATE_UPDATED'; payload: QueueState }
   | { type: 'EXECUTE_PROMPT'; payload: string }
-  | { type: 'PROMPT_COMPLETED'; payload: { success: boolean; error?: string } }
-  | { type: 'PING' };
-
-export interface QueueState {
-  tasks: Task[];
-  isPaused: boolean;
-  isRunning: boolean;
-  currentTaskId: string | null;
-}
+  | { type: 'PROMPT_COMPLETED'; payload: { success: boolean; error?: string; response?: string } }
+  | { type: 'PING' }
+  | { type: 'CREATE_PROJECT'; payload: { name: string } }
+  | { type: 'SWITCH_PROJECT'; payload: string }
+  | { type: 'DELETE_PROJECT'; payload: string }
+  | { type: 'UPDATE_PROJECT_NAME'; payload: { id: string; name: string } };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);

@@ -1,6 +1,6 @@
-import type { ChatGPTAdapter } from './chatgptAdapter';
+import type { PlatformAdapter } from './adapter';
 
-export const waitForCompletion = (adapter: ChatGPTAdapter, timeout = 120000): Promise<void> => {
+export const waitForCompletion = (adapter: PlatformAdapter, timeout = 120000): Promise<void> => {
   return new Promise((resolve, reject) => {
     let checkInterval: any;
     let observer: MutationObserver;

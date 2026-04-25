@@ -1,14 +1,18 @@
 import type { PlatformAdapter } from './adapter';
 
-export const createChatGPTAdapter = (): PlatformAdapter => ({
-  name: 'ChatGPT',
+export const createGeminiAdapter = (): PlatformAdapter => ({
+  name: 'Gemini',
 
   findInput() {
+    // Gemini uses a rich-text editor (contenteditable div) or a plain textarea
     const selectors = [
-      '#prompt-textarea',
-      'textarea[data-id="root"]',
+      '.ql-editor[contenteditable="true"]',           // Quill editor used by Gemini
+      'div[contenteditable="true"].input-area',
+      'rich-textarea .ql-editor',
+      'div[contenteditable="true"][aria-label*="prompt"]',
       'div[contenteditable="true"][role="textbox"]',
-      'textarea'
+      'textarea[aria-label*="prompt"]',
+      'textarea',
     ];
     for (const selector of selectors) {
       const el = document.querySelector(selector) as HTMLElement;
@@ -18,23 +22,26 @@ export const createChatGPTAdapter = (): PlatformAdapter => ({
   },
 
   setInputValue(el: HTMLElement, text: string) {
+    el.focus();
     if (el.tagName === 'TEXTAREA') {
       (el as HTMLTextAreaElement).value = text;
       el.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
-      el.focus();
-      el.innerText = '';
-      el.appendChild(document.createTextNode(text));
+      // Contenteditable (Quill editor)
+      el.innerHTML = `<p>${text}</p>`;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
   },
 
   send() {
+    // Gemini send button selectors
     const selectors = [
-      'button[data-testid="send-button"]',
-      'button[aria-label="Send prompt"]',
-      'button:has(svg path[d*="M15.192"])',
+      'button[aria-label="Send message"]',
+      'button.send-button',
+      'button[mattooltip="Send message"]',
+      '.send-button-container button',
+      'button[aria-label*="Send"]',
     ];
     for (const selector of selectors) {
       const btn = document.querySelector(selector) as HTMLButtonElement;
@@ -52,10 +59,18 @@ export const createChatGPTAdapter = (): PlatformAdapter => ({
   },
 
   isGenerating() {
-    const stop = document.querySelector('button[aria-label="Stop generating"], button[data-testid="stop-button"]');
+    // Gemini shows a "Stop" button or a loading spinner while generating
+    const stop = document.querySelector(
+      'button[aria-label="Stop response"], button[aria-label="Stop"], mat-icon[data-mat-icon-name="stop_circle"]'
+    );
     if (stop) return true;
-    const send = document.querySelector('button[data-testid="send-button"], button[aria-label="Send prompt"]') as HTMLButtonElement;
-    if (send && send.disabled) return true;
+
+    // Check for loading/thinking indicators
+    const loading = document.querySelector(
+      '.loading-indicator, .response-streaming, model-response .loading'
+    );
+    if (loading) return true;
+
     return false;
   }
 });

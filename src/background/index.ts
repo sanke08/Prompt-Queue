@@ -51,6 +51,17 @@ async function handleMessage(message: MessageType) {
       return { success: true };
     case 'GET_QUEUE_STATE':
       return queueManager.getState();
+    case 'CREATE_PROJECT':
+      return await queueManager.createProject(message.payload.name);
+    case 'SWITCH_PROJECT':
+      await queueManager.switchProject(message.payload);
+      return { success: true };
+    case 'DELETE_PROJECT':
+      await queueManager.deleteProject(message.payload);
+      return { success: true };
+    case 'UPDATE_PROJECT_NAME':
+      await queueManager.updateProjectName(message.payload.id, message.payload.name);
+      return { success: true };
     default:
       return null;
   }

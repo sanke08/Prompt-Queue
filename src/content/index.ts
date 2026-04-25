@@ -1,10 +1,19 @@
-import { createAdapter } from './chatgptAdapter';
+import type { PlatformAdapter } from './adapter';
+import { detectPlatform } from './adapter';
+import { createChatGPTAdapter } from './chatgptAdapter';
+import { createGeminiAdapter } from './geminiAdapter';
+import { createClaudeAdapter } from './claudeAdapter';
 import { waitForCompletion } from './observer';
 import type { MessageType } from '../utils/messaging';
 
-console.log('ChatGPT Queue Automator: Content script loaded');
+const platform = detectPlatform();
+let adapter: PlatformAdapter | null = null;
 
-const adapter = createAdapter();
+if (platform === 'chatgpt') adapter = createChatGPTAdapter();
+else if (platform === 'gemini') adapter = createGeminiAdapter();
+else if (platform === 'claude') adapter = createClaudeAdapter();
+
+console.log(`[Queue Automator] Content script loaded on: ${platform ?? 'unknown'}`);
 
 chrome.runtime.onMessage.addListener((message: MessageType, _sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
   console.log('[Content] Received message:', message);
@@ -18,31 +27,35 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender: chrome.runt
         console.error('[Content] Execution error:', err);
         sendResponse({ success: false, error: err.message });
       });
-    return true; // Keep channel open for async response
+    return true;
   }
 
   if (message.type === 'PING') {
     console.log('[Content] Responding to PING');
-    sendResponse({ success: true });
+    sendResponse({ success: true, platform });
     return true;
   }
 });
 
 async function handleExecutePrompt(prompt: string) {
+  if (!adapter) {
+    return { success: false, error: 'No adapter found for this platform' };
+  }
+
   try {
     const input = adapter.findInput();
     if (!input) {
-      return { success: false, error: 'Could not find input box' };
+      return { success: false, error: `Could not find input box on ${adapter.name}` };
     }
 
     adapter.setInputValue(input, prompt);
-    
-    // Small delay to ensure React picks up the value
+
+    // Delay to let the framework pick up the value
     await new Promise(r => setTimeout(r, 500));
 
     const sent = adapter.send();
     if (!sent) {
-      return { success: false, error: 'Failed to click send button' };
+      return { success: false, error: `Failed to click send on ${adapter.name}` };
     }
 
     // Wait for generation to start

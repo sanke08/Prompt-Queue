@@ -23,8 +23,9 @@ export class Worker {
     try {
       while (this.isProcessing) {
         const state = this.queueManager.getState();
+        const activeProject = state.projects.find(p => p.id === state.activeProjectId);
         
-        if (!state.isRunning || state.isPaused) {
+        if (!activeProject || !activeProject.isRunning || activeProject.isPaused) {
           break;
         }
 
@@ -48,8 +49,8 @@ export class Worker {
     try {
       await this.queueManager.updateTask(task.id, { status: 'running' });
       
-      const tab = await this.ensureChatGPTTab(task.targetUrl);
-      if (!tab.id) throw new Error('No ChatGPT tab found');
+      const tab = await this.ensureAITab(task.platform, task.targetUrl);
+      if (!tab.id) throw new Error('No AI chat tab found');
 
       const response = await sendMessageToTab(tab.id, { 
         type: 'EXECUTE_PROMPT', 
@@ -70,7 +71,7 @@ export class Worker {
       if (err.message.includes('Could not establish connection') || err.message.includes('Receiving end does not exist')) {
         console.warn('Connection failed, attempting tab reload and retry...');
         try {
-          const tab = await this.ensureChatGPTTab();
+          const tab = await this.ensureAITab(task.platform);
           await chrome.tabs.reload(tab.id!);
           // Wait for reload
           await new Promise((resolve, reject) => {
@@ -110,8 +111,16 @@ export class Worker {
     }
   }
 
-  private async ensureChatGPTTab(targetUrl?: string): Promise<chrome.tabs.Tab> {
-    // If a specific URL is required, prioritize finding or opening that exact URL
+  private static readonly PLATFORM_CONFIG: Record<string, { patterns: string[]; defaultUrl: string }> = {
+    chatgpt: { patterns: ['https://chatgpt.com/*', 'https://chat.openai.com/*'], defaultUrl: 'https://chatgpt.com/' },
+    gemini:  { patterns: ['https://gemini.google.com/*'], defaultUrl: 'https://gemini.google.com/app' },
+    claude:  { patterns: ['https://claude.ai/*'], defaultUrl: 'https://claude.ai/new' },
+  };
+
+  private async ensureAITab(platform: string, targetUrl?: string): Promise<chrome.tabs.Tab> {
+    const config = Worker.PLATFORM_CONFIG[platform] || Worker.PLATFORM_CONFIG.chatgpt;
+
+    // If a specific URL is required, find or navigate to it
     if (targetUrl) {
       const tabs = await chrome.tabs.query({ url: targetUrl });
       if (tabs.length > 0) {
@@ -119,10 +128,10 @@ export class Worker {
         await chrome.tabs.update(tab.id!, { active: true });
         return tab;
       }
-      // If the specific URL isn't open, we need to navigate an existing ChatGPT tab or open a new one
     }
 
-    const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*', 'https://chat.openai.com/*'] });
+    // Search for tabs matching this platform
+    const tabs = await chrome.tabs.query({ url: config.patterns });
     
     if (tabs.length > 0) {
       const tab = tabs[0];
@@ -151,9 +160,8 @@ export class Worker {
     }
 
     // Open new tab if none found
-    const tab = await chrome.tabs.create({ url: targetUrl || 'https://chatgpt.com/' });
+    const tab = await chrome.tabs.create({ url: targetUrl || config.defaultUrl });
     
-    // Wait for tab to load
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         chrome.tabs.onUpdated.removeListener(listener);

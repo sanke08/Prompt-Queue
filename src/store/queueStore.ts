@@ -1,12 +1,20 @@
-import type { QueueState, Task } from '../utils/messaging';
+import type { QueueState, Project } from '../utils/messaging';
 
-const STORAGE_KEY = 'chatgpt_queue_state';
+const STORAGE_KEY = 'chatgpt_queue_state_v2';
 
-const DEFAULT_STATE: QueueState = {
+const createDefaultProject = (): Project => ({
+  id: 'default',
+  name: 'Default Project',
   tasks: [],
   isPaused: false,
   isRunning: false,
   currentTaskId: null,
+  createdAt: Date.now(),
+});
+
+const DEFAULT_STATE: QueueState = {
+  projects: [createDefaultProject()],
+  activeProjectId: 'default',
 };
 
 export const getStoredState = async (): Promise<QueueState> => {
@@ -23,14 +31,4 @@ export const saveState = async (state: QueueState): Promise<void> => {
       resolve();
     });
   });
-};
-
-export const updateTaskStatus = async (taskId: string, status: Task['status'], error?: string): Promise<QueueState> => {
-  const state = await getStoredState();
-  const updatedTasks = state.tasks.map(t => 
-    t.id === taskId ? { ...t, status, error } : t
-  );
-  const newState = { ...state, tasks: updatedTasks };
-  await saveState(newState);
-  return newState;
 };

@@ -12,26 +12,36 @@ import {
   Command,
   Keyboard,
   X,
-  Link,
+  Globe,
   Link2,
-  Unlink,
+  Folder,
+  ChevronDown,
 } from "lucide-react";
-import type { QueueState, Task } from "../utils/messaging";
+import type { QueueState, Task, AIPlatform } from "../utils/messaging";
 import { sendMessageToBackground } from "../utils/messaging";
 
 const App: React.FC = () => {
   const [state, setState] = useState<QueueState | null>(null);
   const [prompt, setPrompt] = useState("");
   const [targetUrl, setTargetUrl] = useState("");
+  const [selectedPlatform, setSelectedPlatform] =
+    useState<AIPlatform>("chatgpt");
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isListActive, setIsListActive] = useState(false);
   const [isLockedToTab, setIsLockedToTab] = useState(false);
+  const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
   const [currentTab, setCurrentTab] = useState<{
     id: number;
     url: string;
   } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const activeProject =
+    state?.projects.find((p) => p.id === state.activeProjectId) ||
+    state?.projects[0];
 
   // Auto-focus prompt input on mount
   useEffect(() => {
@@ -50,7 +60,10 @@ const App: React.FC = () => {
       const tab = tabs[0];
       if (
         tab?.url &&
-        (tab.url.includes("chatgpt.com") || tab.url.includes("chat.openai.com"))
+        (tab.url.includes("chatgpt.com") ||
+          tab.url.includes("chat.openai.com") ||
+          tab.url.includes("gemini.google.com") ||
+          tab.url.includes("claude.ai"))
       ) {
         setCurrentTab({ id: tab.id!, url: tab.url });
       }
@@ -87,10 +100,13 @@ const App: React.FC = () => {
         switch (e.key.toLowerCase()) {
           case "s": // Start / Pause / Resume
             e.preventDefault();
-            if (!state?.isRunning) {
-              if (state?.tasks.filter((t) => t.status === "pending").length)
+            if (!activeProject?.isRunning) {
+              if (
+                activeProject?.tasks.filter((t) => t.status === "pending")
+                  .length
+              )
                 handleStart();
-            } else if (state?.isPaused) {
+            } else if (activeProject?.isPaused) {
               handleResume();
             } else {
               handlePause();
@@ -110,7 +126,7 @@ const App: React.FC = () => {
             e.preventDefault();
             setIsListActive(true);
             setSelectedIndex((prev) =>
-              Math.min((state?.tasks.length || 1) - 1, prev + 1),
+              Math.min((activeProject?.tasks.length || 1) - 1, prev + 1),
             );
             break;
           case "k": // Select Previous
@@ -121,24 +137,25 @@ const App: React.FC = () => {
             break;
           case "delete": // Delete Selected
             e.preventDefault();
-            if (state?.tasks[selectedIndex]) {
-              handleRemove(state.tasks[selectedIndex].id);
+            if (activeProject?.tasks[selectedIndex]) {
+              handleRemove(activeProject.tasks[selectedIndex].id);
             }
             break;
           case "?": // Show Shortcuts
             e.preventDefault();
             setShowShortcuts(true);
             break;
-        }
-      }
-
-      // Alt + L: Toggle Lock to Tab
-      if (e.altKey && e.code === "KeyL") {
-        e.preventDefault();
-        if (currentTab) {
-          const newLocked = !isLockedToTab;
-          setIsLockedToTab(newLocked);
-          if (newLocked) setTargetUrl(currentTab.url);
+          case "l": // Lock to Tab
+            if (e.altKey) {
+              e.preventDefault();
+              if (currentTab) {
+                const newLocked = !isLockedToTab;
+                setIsLockedToTab(newLocked);
+                if (newLocked) setTargetUrl(currentTab.url);
+                else setTargetUrl("");
+              }
+            }
+            break;
         }
       }
     };
@@ -148,7 +165,32 @@ const App: React.FC = () => {
       chrome.runtime.onMessage.removeListener(listener);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [state]);
+  }, [
+    state,
+    activeProject,
+    showShortcuts,
+    selectedIndex,
+    isListActive,
+    isLockedToTab,
+    currentTab,
+  ]);
+
+  const getPlatformFromUrl = (url: string): AIPlatform | null => {
+    if (url.includes("chatgpt.com") || url.includes("chat.openai.com")) return "chatgpt";
+    if (url.includes("gemini.google.com")) return "gemini";
+    if (url.includes("claude.ai")) return "claude";
+    return null;
+  };
+
+  // Sync platform when locked or URL changes
+  useEffect(() => {
+    if (isLockedToTab || targetUrl) {
+      const detected = getPlatformFromUrl(targetUrl || currentTab?.url || "");
+      if (detected) {
+        setSelectedPlatform(detected);
+      }
+    }
+  }, [isLockedToTab, targetUrl, currentTab]);
 
   const handleAddPrompt = async () => {
     if (!prompt.trim()) return;
@@ -156,13 +198,56 @@ const App: React.FC = () => {
       targetUrl.trim() || (isLockedToTab ? currentTab?.url : undefined);
     await sendMessageToBackground({
       type: "ADD_TASK",
-      payload: { prompt, targetUrl: finalTargetUrl },
+      payload: {
+        prompt,
+        platform: selectedPlatform,
+        targetUrl: finalTargetUrl,
+      },
     });
     setPrompt("");
     setTargetUrl("");
-    setIsLockedToTab(false);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+  };
+
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim()) return;
+    await sendMessageToBackground({
+      type: "CREATE_PROJECT",
+      payload: { name: newProjectName },
+    });
+    setNewProjectName("");
+    setIsCreatingProject(false);
+  };
+
+  const handleSwitchProject = async (id: string) => {
+    await sendMessageToBackground({ type: "SWITCH_PROJECT", payload: id });
+    setIsProjectMenuOpen(false);
+  };
+
+  const handleDeleteProject = async (id: string) => {
+    if (state && state.projects.length <= 1) return;
+    await sendMessageToBackground({ type: "DELETE_PROJECT", payload: id });
+  };
+
+  const getPlatformBadge = (platform: AIPlatform) => {
+    switch (platform) {
+      case "chatgpt":
+        return (
+          <span className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">
+            ChatGPT
+          </span>
+        );
+      case "gemini":
+        return (
+          <span className="bg-blue-500/10 text-blue-500 border border-blue-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">
+            Gemini
+          </span>
+        );
+      case "claude":
+        return (
+          <span className="bg-orange-500/10 text-orange-500 border border-orange-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">
+            Claude
+          </span>
+        );
     }
   };
 
@@ -191,17 +276,101 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-mono-main overflow-hidden text-mono-primary selection:bg-white selection:text-black">
       {/* Header */}
-      <header className="p-5 py-2 border-b border-mono bg-mono-sidebar flex justify-between items-center z-10 shadow-sm">
-        <h1 className="text-sm font-bold tracking-tighter uppercase flex items-center gap-2">
-          <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-black text-[10px] font-black">
-            Q
+      <header className="p-5 py-2 border-b border-mono bg-mono-sidebar flex justify-between items-center z-20 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <button
+              onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-mono-main border border-mono rounded-lg hover:border-white transition-all group"
+            >
+              <Folder className="w-3.5 h-3.5 text-mono-secondary group-hover:text-white" />
+              <span className="text-[10px] font-black uppercase tracking-tight max-w-[100px] truncate">
+                {activeProject?.name || "Project"}
+              </span>
+              <ChevronDown
+                className={`w-3 h-3 transition-transform ${isProjectMenuOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {isProjectMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setIsProjectMenuOpen(false)}
+                />
+                <div className="absolute top-full left-0 mt-2 w-56 bg-mono-sidebar border border-mono rounded-xl shadow-2xl z-40 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="p-2 border-b border-mono bg-mono-main/50">
+                    <p className="text-[8px] font-black uppercase tracking-[0.2em] text-mono-secondary px-2 py-1">
+                      Projects
+                    </p>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto custom-scroll">
+                    {state.projects.map((p) => (
+                      <div
+                        key={p.id}
+                        className="group/item flex items-center justify-between p-1 px-2 hover:bg-mono-hover"
+                      >
+                        <button
+                          onClick={() => handleSwitchProject(p.id)}
+                          className="flex-1 flex items-center gap-2 p-2 text-left"
+                        >
+                          <div
+                            className={`w-1.5 h-1.5 rounded-full ${p.id === activeProject?.id ? "bg-white shadow-[0_0_8px_white]" : "bg-transparent border border-mono"}`}
+                          />
+                          <span
+                            className={`text-[10px] font-bold ${p.id === activeProject?.id ? "text-white" : "text-mono-secondary"}`}
+                          >
+                            {p.name}
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteProject(p.id)}
+                          className="p-2 opacity-0 group-hover/item:opacity-40 hover:!opacity-100 transition-opacity text-red-500"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="p-2 border-t border-mono">
+                    {isCreatingProject ? (
+                      <div className="flex items-center gap-1 p-1">
+                        <input
+                          autoFocus
+                          value={newProjectName}
+                          onChange={(e) => setNewProjectName(e.target.value)}
+                          onKeyDown={(e) =>
+                            e.key === "Enter" && handleCreateProject()
+                          }
+                          placeholder="Project name..."
+                          className="flex-1 bg-mono-main border border-mono rounded px-2 py-1.5 text-[10px] focus:outline-none focus:border-white"
+                        />
+                        <button
+                          onClick={handleCreateProject}
+                          className="p-1.5 bg-white text-black rounded hover:bg-neutral-200"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setIsCreatingProject(true)}
+                        className="w-full flex items-center gap-2 p-2 text-[10px] font-black uppercase tracking-tighter text-mono-secondary hover:text-white transition-colors"
+                      >
+                        <Plus className="w-3 h-3" /> New Project
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-          Queue Automator
-        </h1>
+        </div>
+
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowShortcuts(!showShortcuts)}
-            className={`p-1.5 rounded-lg transition-all duration-200 ${showShortcuts ? "bg-white text-black" : "hover:bg-mono-hover text-mono-secondary"}`}
+            onClick={() => setShowShortcuts(true)}
+            className="p-1.5 hover:bg-mono-hover rounded-lg text-mono-secondary transition-colors"
             title="Keyboard Shortcuts (?)"
           >
             <Keyboard className="w-4 h-4" />
@@ -218,17 +387,21 @@ const App: React.FC = () => {
 
       {/* Shortcuts Overlay */}
       {showShortcuts && (
-        <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-xl p-8 flex flex-col animate-in fade-in zoom-in duration-300">
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col p-10 animate-in fade-in duration-300">
           <div className="flex justify-between items-center mb-8">
-            <h2 className="text-xs font-black uppercase tracking-[0.2em] flex items-center gap-2">
-              <Command className="w-4 h-4" />
-              Shortcuts
-            </h2>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center text-black shadow-lg">
+                <Command className="w-5 h-5" />
+              </div>
+              <h2 className="text-xl font-black uppercase tracking-tighter">
+                Shortcuts
+              </h2>
+            </div>
             <button
               onClick={() => setShowShortcuts(false)}
-              className="p-1.5 hover:bg-mono-hover rounded-full text-mono-secondary transition-colors"
+              className="p-2 hover:bg-white/10 rounded-full transition-colors"
             >
-              <X className="w-4 h-4" />
+              <X className="w-6 h-6" />
             </button>
           </div>
 
@@ -243,25 +416,24 @@ const App: React.FC = () => {
               { keys: ["Alt", "L"], desc: "Toggle Lock to Current Tab" },
               { keys: ["Enter"], desc: "Add prompt (from input)" },
               { keys: ["Shift", "Enter"], desc: "New line in input" },
-              { keys: ["Esc"], desc: "Back / Clear input" },
-            ].map((s, i) => (
+            ].map((shortcut, i) => (
               <div
                 key={i}
-                className="flex justify-between items-center p-3.5 border border-mono rounded-lg bg-mono-sidebar/40 hover:bg-mono-sidebar transition-colors"
+                className="flex items-center justify-between py-3 border-b border-white/5 last:border-0"
               >
-                <span className="text-[11px] text-mono-secondary font-medium tracking-wide uppercase">
-                  {s.desc}
-                </span>
                 <div className="flex gap-1.5">
-                  {s.keys.map((k, j) => (
+                  {shortcut.keys.map((key) => (
                     <kbd
-                      key={j}
-                      className="px-2 py-1 text-[9px] font-black bg-white text-black rounded shadow-[2px_2px_0px_rgba(255,255,255,0.2)]"
+                      key={key}
+                      className="px-2 py-1 bg-white text-black text-[9px] font-black rounded uppercase min-w-[24px] text-center shadow-[0_2px_0_#ccc]"
                     >
-                      {k}
+                      {key}
                     </kbd>
                   ))}
                 </div>
+                <span className="text-[10px] font-bold text-mono-secondary uppercase tracking-tight">
+                  {shortcut.desc}
+                </span>
               </div>
             ))}
           </div>
@@ -297,16 +469,37 @@ const App: React.FC = () => {
                 {isLockedToTab ? (
                   <Link2 className="w-3 h-3" />
                 ) : (
-                  <Unlink className="w-3 h-3" />
+                  <Globe className="w-3 h-3" />
                 )}
                 {isLockedToTab ? "Locked" : "Any Chat"}
               </button>
             )}
           </div>
 
+          {/* Platform Selector */}
+          <div className="flex gap-2">
+            {(["chatgpt", "gemini", "claude"] as AIPlatform[]).map((p) => {
+              const isDisabled = isLockedToTab;
+              return (
+                <button
+                  key={p}
+                  disabled={isDisabled}
+                  onClick={() => setSelectedPlatform(p)}
+                  className={`flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
+                    selectedPlatform === p
+                      ? "bg-white text-black shadow-md"
+                      : "bg-mono-sidebar text-mono-secondary"
+                  } ${isDisabled ? "opacity-50 cursor-not-allowed" : "hover:border-neutral-500 border border-transparent"}`}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+
           {isLockedToTab && (
             <div className="flex items-center gap-2 px-3 py-2 bg-mono-sidebar border border-mono rounded-lg animate-in slide-in-from-top-2 duration-300">
-              <Link className="w-3 h-3 text-mono-secondary shrink-0" />
+              <Globe className="w-3 h-3 text-mono-secondary shrink-0" />
               <input
                 type="text"
                 value={targetUrl}
@@ -346,7 +539,7 @@ const App: React.FC = () => {
             className="w-full bg-white hover:bg-neutral-200 disabled:opacity-20 disabled:hover:bg-white text-black py-3 rounded-lg flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest transition-all transform active:scale-[0.98] shadow-lg shadow-black/50"
             title="Add to Queue (Enter)"
           >
-            <Plus className="w-4 h-4 stroke-[3px]" />
+            <Plus className="w-4 h-4" />
             Add to Queue
           </button>
         </div>
@@ -354,22 +547,25 @@ const App: React.FC = () => {
         {/* Scrollable Queue List */}
         <div className="flex-1 overflow-y-auto p-5 space-y-3 custom-scroll">
           <div className="flex justify-between items-center text-[10px] text-mono-secondary font-black uppercase tracking-[0.2em] px-1 mb-2">
-            <span>Queue ({state.tasks.length})</span>
-            {state.isRunning && (
+            <span>
+              {activeProject?.name || "Queue"} (
+              {activeProject?.tasks.length || 0})
+            </span>
+            {activeProject?.isRunning && (
               <span className="flex items-center gap-2 text-white">
                 <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
-                {state.isPaused ? "Paused" : "Processing"}
+                {activeProject?.isPaused ? "Paused" : "Processing"}
               </span>
             )}
           </div>
 
           <div className="space-y-3">
-            {state.tasks.length === 0 ? (
+            {!activeProject || activeProject.tasks.length === 0 ? (
               <div className="text-center py-12 border border-dashed border-mono rounded-2xl text-mono-secondary text-[10px] font-bold uppercase tracking-widest opacity-40">
                 Queue Empty
               </div>
             ) : (
-              state.tasks.map((task, index) => (
+              activeProject.tasks.map((task, index) => (
                 <div
                   key={task.id}
                   className={`group relative border rounded-lg p-4 py-2 bg-mono-sidebar transition-all duration-300 ${
@@ -385,6 +581,9 @@ const App: React.FC = () => {
                   <div className="flex gap-4">
                     <div className="mt-1">{getStatusIcon(task.status)}</div>
                     <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        {getPlatformBadge(task.platform)}
+                      </div>
                       <p
                         className={`text-xs font-medium leading-relaxed break-words ${task.status === "running" ? "text-black" : "text-mono-primary"}`}
                       >
@@ -394,7 +593,7 @@ const App: React.FC = () => {
                         <div
                           className={`flex items-center gap-1.5 text-[9px] font-bold mt-2 uppercase tracking-tighter opacity-60`}
                         >
-                          <Link className="w-3 h-3" />
+                          <Globe className="w-3 h-3" />
                           <span className="truncate max-w-[140px]">
                             {task.targetUrl.split("/").pop() || "Specific Chat"}
                           </span>
@@ -408,7 +607,12 @@ const App: React.FC = () => {
                     </div>
                     <button
                       onClick={() => handleRemove(task.id)}
-                      className={`opacity-0 group-hover:opacity-100 p-1 rounded-lg transition-all ${task.status === "running" ? "hover:bg-black/10 text-black" : "hover:bg-white/10 text-mono-secondary hover:text-white"}`}
+                      className={`p-2 rounded-lg transition-all ${
+                        task.status === "running"
+                          ? "hover:bg-black/5 text-black/40 hover:text-black"
+                          : "hover:bg-mono-hover text-mono-secondary hover:text-red-500 opacity-0 group-hover:opacity-100"
+                      }`}
+                      title="Remove Task"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -422,11 +626,13 @@ const App: React.FC = () => {
 
       {/* Footer Controls */}
       <footer className="p-5 py-2 border-t border-mono bg-mono-sidebar/90 backdrop-blur-xl shrink-0 z-10 shadow-[0_-10px_20px_rgba(0,0,0,0.5)]">
-        {!state.isRunning ? (
+        {!activeProject?.isRunning ? (
           <button
             onClick={handleStart}
             disabled={
-              state.tasks.filter((t) => t.status === "pending").length === 0
+              !activeProject ||
+              activeProject.tasks.filter((t) => t.status === "pending")
+                .length === 0
             }
             className="w-full bg-white hover:bg-neutral-200 disabled:opacity-20 py-3 rounded-lg flex items-center justify-center gap-3 text-xs font-black uppercase tracking-[0.2em] text-black transition-all transform active:scale-[0.98] shadow-xl shadow-black/80"
             title="Start (S)"
@@ -436,7 +642,7 @@ const App: React.FC = () => {
           </button>
         ) : (
           <div className="flex gap-3">
-            {state.isPaused ? (
+            {activeProject.isPaused ? (
               <button
                 onClick={handleResume}
                 className="flex-1 bg-white hover:bg-neutral-200 text-black py-3 rounded-lg flex items-center justify-center gap-3 text-xs font-black uppercase tracking-[0.2em] transition-all transform active:scale-[0.98]"

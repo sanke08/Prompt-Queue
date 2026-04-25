@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Queue Automator",
-  "version": "1.0.0",
-  "description": "Automate sending multiple prompts to ChatGPT sequentially using a queue system.",
+  "name": "AI Queue Automator",
+  "version": "1.1.0",
+  "description": "Automate sending multiple prompts to ChatGPT, Gemini, and Claude sequentially using a queue system.",
   "permissions": [
     "storage",
     "tabs",
@@ -12,10 +12,12 @@
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://chat.openai.com/*"
+    "https://chat.openai.com/*",
+    "https://gemini.google.com/*",
+    "https://claude.ai/*"
   ],
   "action": {
-    "default_title": "Open ChatGPT Queue Sidebar"
+    "default_title": "Open AI Queue Sidebar"
   },
   "side_panel": {
     "default_path": "index.html"
@@ -28,7 +30,9 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*",
+        "https://claude.ai/*"
       ],
       "js": ["content.js"]
     }
