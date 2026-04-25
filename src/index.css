@@ -2,27 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  width: 400px;
-  height: 600px;
-  margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  @apply bg-chatgpt-main text-white;
+@layer base {
+  :root {
+    --bg-main: 10, 10, 10;
+    --bg-sidebar: 18, 18, 18;
+    --bg-hover: 26, 26, 26;
+    --border-primary: 38, 38, 38;
+    --text-primary: 245, 245, 245;
+    --text-secondary: 163, 163, 163;
+    --accent-white: 255, 255, 255;
+  }
+
+  body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: rgb(var(--bg-main));
+    color: rgb(var(--text-primary));
+    overflow: hidden;
+    height: 100vh;
+  }
+}
+
+@layer utilities {
+  .bg-mono-main { background-color: rgb(var(--bg-main)); }
+  .bg-mono-sidebar { background-color: rgb(var(--bg-sidebar)); }
+  .bg-mono-hover { background-color: rgb(var(--bg-hover)); }
+  .border-mono { border-color: rgb(var(--border-primary)); }
+  .text-mono-primary { color: rgb(var(--text-primary)); }
+  .text-mono-secondary { color: rgb(var(--text-secondary)); }
 }
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-chatgpt-sidebar;
+  background: rgb(var(--bg-main));
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-chatgpt-border rounded-full;
+  background: rgb(var(--border-primary));
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-500;
+  background: rgb(var(--text-secondary));
 }

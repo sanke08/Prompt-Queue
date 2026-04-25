@@ -7,15 +7,18 @@
     "storage",
     "tabs",
     "activeTab",
-    "scripting"
+    "scripting",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*"
   ],
   "action": {
-    "default_popup": "index.html",
-    "default_title": "ChatGPT Queue"
+    "default_title": "Open ChatGPT Queue Sidebar"
+  },
+  "side_panel": {
+    "default_path": "index.html"
   },
   "background": {
     "service_worker": "background.js",

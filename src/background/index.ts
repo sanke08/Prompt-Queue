@@ -7,6 +7,10 @@ const worker = new Worker(queueManager);
 
 chrome.runtime.onInstalled.addListener(async () => {
   await queueManager.init();
+  // Enable side panel on click
+  (chrome as any).sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error: any) => console.error(error));
 });
 
 // Initialize on startup

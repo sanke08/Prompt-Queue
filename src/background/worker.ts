@@ -20,22 +20,27 @@ export class Worker {
   }
 
   private async processQueue() {
-    while (this.isProcessing) {
-      const state = this.queueManager.getState();
-      
-      if (!state.isRunning || state.isPaused) {
-        this.isProcessing = false;
-        break;
-      }
+    try {
+      while (this.isProcessing) {
+        const state = this.queueManager.getState();
+        
+        if (!state.isRunning || state.isPaused) {
+          break;
+        }
 
-      const nextTask = await this.queueManager.getNextPendingTask();
-      if (!nextTask) {
-        await this.queueManager.setRunning(false);
-        this.isProcessing = false;
-        break;
-      }
+        const nextTask = await this.queueManager.getNextPendingTask();
+        if (!nextTask) {
+          await this.queueManager.setRunning(false);
+          break;
+        }
 
-      await this.executeTask(nextTask);
+        await this.executeTask(nextTask);
+        
+        // Small delay between tasks to prevent tight loops and allow UI updates
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    } finally {
+      this.isProcessing = false;
     }
   }
 
@@ -68,13 +73,20 @@ export class Worker {
           const tab = await this.ensureChatGPTTab();
           await chrome.tabs.reload(tab.id!);
           // Wait for reload
-          await new Promise((resolve) => {
-            chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              chrome.tabs.onUpdated.removeListener(listener);
+              reject(new Error('Tab reload timeout'));
+            }, 30000);
+
+            function listener(tabId: number, info: any) {
               if (tabId === tab.id && info.status === 'complete') {
+                clearTimeout(timeout);
                 chrome.tabs.onUpdated.removeListener(listener);
                 resolve(null);
               }
-            });
+            }
+            chrome.tabs.onUpdated.addListener(listener);
           });
           // Retry the execution once
           const retryResponse = await sendMessageToTab(tab.id!, { 
@@ -119,13 +131,20 @@ export class Worker {
       // If we have a targetUrl but the current tab is elsewhere, navigate it
       if (targetUrl && tab.url !== targetUrl) {
         await chrome.tabs.update(tab.id!, { url: targetUrl });
-        return new Promise((resolve) => {
-          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(listener);
+            reject(new Error('Tab navigation timeout'));
+          }, 30000);
+
+          function listener(tabId: number, info: any) {
             if (tabId === tab.id && info.status === 'complete') {
+              clearTimeout(timeout);
               chrome.tabs.onUpdated.removeListener(listener);
               resolve(tab);
             }
-          });
+          }
+          chrome.tabs.onUpdated.addListener(listener);
         });
       }
       return tab;
@@ -135,13 +154,20 @@ export class Worker {
     const tab = await chrome.tabs.create({ url: targetUrl || 'https://chatgpt.com/' });
     
     // Wait for tab to load
-    return new Promise((resolve) => {
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(listener);
+        reject(new Error('Tab creation timeout'));
+      }, 30000);
+
+      function listener(tabId: number, info: any) {
         if (tabId === tab.id && info.status === 'complete') {
+          clearTimeout(timeout);
           chrome.tabs.onUpdated.removeListener(listener);
           resolve(tab);
         }
-      });
+      }
+      chrome.tabs.onUpdated.addListener(listener);
     });
   }
 }
