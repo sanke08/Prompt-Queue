@@ -68,7 +68,7 @@ const App: React.FC = () => {
             e.preventDefault();
             handleClear();
             break;
-          case 'q': // Focus Input
+          case 'i': // Focus Input (Insert mode)
             e.preventDefault();
             textareaRef.current?.focus();
             break;
@@ -82,7 +82,7 @@ const App: React.FC = () => {
             e.preventDefault();
             setSelectedIndex(prev => Math.max(0, prev - 1));
             break;
-          case 'x': // Delete Selected
+          case 'delete': // Delete Selected
             e.preventDefault();
             if (state?.tasks[selectedIndex]) {
               handleRemove(state.tasks[selectedIndex].id);
@@ -177,11 +177,12 @@ const App: React.FC = () => {
             {[
               { keys: ['S'], desc: 'Start / Pause / Resume' },
               { keys: ['C'], desc: 'Clear entire queue' },
-              { keys: ['Q'], desc: 'Focus prompt input' },
-              { keys: ['J', 'K'], desc: 'Navigate queue (Vim style)' },
-              { keys: ['X'], desc: 'Delete selected task' },
+              { keys: ['I'], desc: 'Focus prompt input' },
+              { keys: ['J', 'K'], desc: 'Navigate queue' },
+              { keys: ['Delete'], desc: 'Delete selected task' },
               { keys: ['?'], desc: 'Show this help' },
-              { keys: ['Ctrl', 'Enter'], desc: 'Add prompt (from input)' },
+              { keys: ['Enter'], desc: 'Add prompt (from input)' },
+              { keys: ['Shift', 'Enter'], desc: 'New line in input' },
               { keys: ['Esc'], desc: 'Back / Clear input' },
             ].map((s, i) => (
               <div key={i} className="flex justify-between items-center p-2.5 border border-chatgpt-border rounded-xl bg-chatgpt-sidebar/50">
@@ -218,14 +219,17 @@ const App: React.FC = () => {
             placeholder="Enter prompt..."
             className="w-full bg-chatgpt-sidebar border border-chatgpt-border rounded-lg p-3 text-sm focus:outline-none focus:ring-1 focus:ring-green-500 min-h-[80px] max-h-[200px] resize-none transition-all"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && e.ctrlKey) handleAddPrompt();
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleAddPrompt();
+              }
             }}
           />
           <button
             onClick={handleAddPrompt}
             disabled={!prompt.trim()}
             className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:hover:bg-green-600 py-2 rounded-lg flex items-center justify-center gap-2 text-sm font-medium transition-all transform active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-green-500/50"
-            title="Add to Queue (Ctrl+Enter)"
+            title="Add to Queue (Enter)"
           >
             <Plus className="w-4 h-4" />
             Add to Queue
