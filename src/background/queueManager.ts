@@ -4,98 +4,122 @@ import { getStoredState, saveState } from '../store/queueStore';
 export class QueueManager {
   private state: QueueState = {
     projects: [],
+    tasks: [],
     activeProjectId: '',
   };
 
   async init() {
-    this.state = await getStoredState();
+    const stored = await getStoredState();
+    // Migrating old state if necessary (simple check)
+    if (stored && !Array.isArray(stored.tasks)) {
+       this.state = {
+         ...stored,
+         tasks: (stored as any).projects?.flatMap((p: any) => 
+           (p.tasks || []).map((t: any) => ({ ...t, projectId: p.id }))
+         ) || [],
+         projects: (stored as any).projects?.map((p: any) => {
+           const { tasks, ...proj } = p;
+           return proj;
+         }) || []
+       };
+    } else {
+       this.state = stored || this.state;
+    }
   }
 
   getState() {
     return this.state;
   }
 
-  private get activeProject(): Project {
-    const project = this.state.projects.find(p => p.id === this.state.activeProjectId);
-    if (!project) {
-        // Fallback or create if missing (shouldn't happen with proper init)
-        return this.state.projects[0];
-    }
-    return project;
+  private get activeProject(): Project | undefined {
+    return this.state.projects.find(p => p.id === this.state.activeProjectId) || this.state.projects[0];
   }
 
-  private updateActiveProject(updates: Partial<Project>) {
+  private updateProject(projectId: string, updates: Partial<Project>) {
     this.state.projects = this.state.projects.map(p => 
-      p.id === this.state.activeProjectId ? { ...p, ...updates } : p
+      p.id === projectId ? { ...p, ...updates } : p
     );
   }
 
-  async addTask(payload: { prompt: string; platform: AIPlatform; targetUrl?: string }) {
+  async addTask(payload: { prompt: string; platform: AIPlatform }) {
+    const project = this.activeProject;
+    if (!project) throw new Error("No active project");
+
     const newTask: Task = {
       id: Math.random().toString(36).substring(7),
+      projectId: project.id,
       prompt: payload.prompt,
       platform: payload.platform,
-      targetUrl: payload.targetUrl,
       status: 'pending',
     };
     
-    const project = this.activeProject;
-    this.updateActiveProject({
-        tasks: [...project.tasks, newTask]
-    });
-
+    this.state.tasks.push(newTask);
     await this.persist();
     return newTask;
   }
 
   async removeTask(taskId: string) {
-    const project = this.activeProject;
-    this.updateActiveProject({
-        tasks: project.tasks.filter(t => t.id !== taskId),
-        currentTaskId: project.currentTaskId === taskId ? null : project.currentTaskId
-    });
+    const task = this.state.tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    this.state.tasks = this.state.tasks.filter(t => t.id !== taskId);
+    
+    const project = this.state.projects.find(p => p.id === task.projectId);
+    if (project && project.currentTaskId === taskId) {
+        this.updateProject(project.id, { currentTaskId: null });
+    }
+    
     await this.persist();
   }
 
-  async clearQueue() {
-    this.updateActiveProject({
-        tasks: [],
+  async clearQueue(projectId?: string) {
+    const pid = projectId || this.state.activeProjectId;
+    this.state.tasks = this.state.tasks.filter(t => t.projectId !== pid);
+    this.updateProject(pid, {
         currentTaskId: null,
         isRunning: false
     });
     await this.persist();
   }
 
-  async setRunning(running: boolean) {
-    this.updateActiveProject({
+  async setRunning(running: boolean, projectId?: string) {
+    const pid = projectId || this.state.activeProjectId;
+    const project = this.state.projects.find(p => p.id === pid);
+    if (!project) return;
+
+    this.updateProject(pid, {
         isRunning: running,
-        isPaused: running ? this.activeProject.isPaused : false
+        isPaused: running ? project.isPaused : false
     });
     await this.persist();
   }
 
-  async setPaused(paused: boolean) {
-    this.updateActiveProject({ isPaused: paused });
+  async setPaused(paused: boolean, projectId?: string) {
+    const pid = projectId || this.state.activeProjectId;
+    this.updateProject(pid, { isPaused: paused });
     await this.persist();
   }
 
   async updateTask(taskId: string, updates: Partial<Task>) {
-    const project = this.activeProject;
-    this.updateActiveProject({
-        tasks: project.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t)
-    });
+    this.state.tasks = this.state.tasks.map(t => 
+      t.id === taskId ? { ...t, ...updates } : t
+    );
     await this.persist();
   }
 
-  async getNextPendingTask() {
-    return this.activeProject.tasks.find(t => t.status === 'pending');
+  async getNextPendingTask(projectId?: string) {
+    const pid = projectId || this.state.activeProjectId;
+    return this.state.tasks.find(t => t.projectId === pid && t.status === 'pending');
   }
 
   async getNextPendingTaskForPlatform(platform: AIPlatform) {
-    // Look for any running project that has a pending task for this platform
     for (const project of this.state.projects) {
         if (!project.isRunning || project.isPaused) continue;
-        const task = project.tasks.find(t => t.status === 'pending' && t.platform === platform);
+        const task = this.state.tasks.find(t => 
+            t.projectId === project.id && 
+            t.status === 'pending' && 
+            t.platform === platform
+        );
         if (task) return { task, project };
     }
     return null;
@@ -107,7 +131,6 @@ export class QueueManager {
     const newProject: Project = {
         id: Math.random().toString(36).substring(7),
         name,
-        tasks: [],
         isPaused: false,
         isRunning: false,
         currentTaskId: null,
@@ -127,10 +150,11 @@ export class QueueManager {
   }
 
   async deleteProject(projectId: string) {
-    // Prevent deleting the last project
     if (this.state.projects.length <= 1) return;
 
     this.state.projects = this.state.projects.filter(p => p.id !== projectId);
+    this.state.tasks = this.state.tasks.filter(t => t.projectId !== projectId);
+
     if (this.state.activeProjectId === projectId) {
         this.state.activeProjectId = this.state.projects[0].id;
     }
@@ -138,32 +162,36 @@ export class QueueManager {
   }
 
   async updateProjectName(projectId: string, name: string) {
-    this.state.projects = this.state.projects.map(p => 
-        p.id === projectId ? { ...p, name } : p
-    );
+    this.updateProject(projectId, { name });
     await this.persist();
   }
 
   async clearProjectLock(projectId: string) {
-    this.state.projects = this.state.projects.map(p => 
-        p.id === projectId ? { ...p, targetUrl: undefined } : p
-    );
+    this.updateProject(projectId, { targetUrl: undefined });
     await this.persist();
   }
 
   async updateProjectTargetUrl(projectId: string, targetUrl: string) {
-    this.state.projects = this.state.projects.map(p => 
-        p.id === projectId ? { ...p, targetUrl } : p
-    );
+    this.updateProject(projectId, { targetUrl });
     await this.persist();
   }
 
-  private async persist() {
-    await saveState(this.state);
-    chrome.runtime.sendMessage({ type: 'QUEUE_STATE_UPDATED', payload: this.state }, () => {
-      if (chrome.runtime.lastError) {
-        // Expected if popup is closed
-      }
-    });
+  private persistTimeout: any = null;
+
+  private async persist(immediate = false) {
+    const save = async () => {
+      await saveState(this.state);
+      chrome.runtime.sendMessage({ type: 'QUEUE_STATE_UPDATED', payload: this.state }, () => {
+        if (chrome.runtime.lastError) {}
+      });
+    };
+
+    if (immediate) {
+      if (this.persistTimeout) clearTimeout(this.persistTimeout);
+      await save();
+    } else {
+      if (this.persistTimeout) clearTimeout(this.persistTimeout);
+      this.persistTimeout = setTimeout(save, 300);
+    }
   }
 }

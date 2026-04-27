@@ -5,7 +5,6 @@ const STORAGE_KEY = 'prompt_queue_state';
 const createDefaultProject = (): Project => ({
   id: 'default',
   name: 'Default Project',
-  tasks: [],
   isPaused: false,
   isRunning: false,
   currentTaskId: null,
@@ -14,6 +13,7 @@ const createDefaultProject = (): Project => ({
 
 const DEFAULT_STATE: QueueState = {
   projects: [createDefaultProject()],
+  tasks: [],
   activeProjectId: 'default',
 };
 

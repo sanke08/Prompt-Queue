@@ -16,20 +16,161 @@ import {
   Link2,
   Folder,
   ChevronDown,
+  ExternalLink,
+  Activity,
 } from "lucide-react";
 import type { QueueState, Task, AIPlatform } from "../utils/messaging";
 import { sendMessageToBackground } from "../utils/messaging";
 
+// Memoized Task Item Component for performance
+const TaskItem = React.memo(
+  ({
+    task,
+    index,
+    selectedIndex,
+    isListActive,
+    onRemove,
+    getStatusIcon,
+    getPlatformBadge,
+  }: {
+    task: Task;
+    index: number;
+    selectedIndex: number;
+    isListActive: boolean;
+    onRemove: (id: string) => void;
+    getStatusIcon: (status: Task["status"]) => React.ReactNode;
+    getPlatformBadge: (platform: AIPlatform) => React.ReactNode;
+  }) => {
+    const isSelected = index === selectedIndex && isListActive;
+    const isRunning = task.status === "running";
+
+    return (
+      <div
+        className={`group relative border rounded-lg p-4 py-2 bg-mono-sidebar transition-all duration-300 ${
+          isSelected
+            ? "ring-1 ring-white border-transparent shadow-[0_0_20px_rgba(255,255,255,0.05)]"
+            : "border-mono"
+        } ${
+          isRunning
+            ? "bg-white text-black translate-x-1"
+            : "hover:border-neutral-500"
+        }`}
+      >
+        <div className="flex gap-4">
+          <div className="mt-1 transition-transform duration-500">
+            {isRunning ? (
+              <div className="relative">
+                <Loader2 className="w-4 h-4 text-mono-primary animate-spin" />
+                <div className="absolute inset-0 bg-white/20 rounded-full animate-ping" />
+              </div>
+            ) : (
+              getStatusIcon(task.status)
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              {getPlatformBadge(task.platform)}
+              {isRunning && (
+                <span className="text-[8px] font-black uppercase tracking-widest text-mono-primary animate-pulse">
+                  Active
+                </span>
+              )}
+            </div>
+            <p
+              className={`text-xs font-medium leading-relaxed break-words transition-colors text-mono-primary`}
+            >
+              {task.prompt}
+            </p>
+            {task.statusDetail && (
+              <p
+                className={`text-[9px] mt-1 font-bold uppercase tracking-tighter opacity-60 flex items-center gap-1 text-mono-primary`}
+              >
+                <Activity className="w-2.5 h-2.5" />
+                {task.statusDetail}
+              </p>
+            )}
+            {task.error && (
+              <p className="text-[10px] text-red-500 mt-2 font-bold uppercase tracking-tighter">
+                Error: {task.error}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => onRemove(task.id)}
+            className={`p-2 rounded-lg transition-all ${
+              isRunning
+                ? "hover:bg-black/5"
+                : "hover:bg-mono-hover text-mono-secondary hover:text-red-500 opacity-0 group-hover:opacity-100"
+            }`}
+            title="Remove Task"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  },
+);
+
+const getPlatformFromUrl = (url: string): AIPlatform | null => {
+  if (!url) return null;
+  if (url.includes("chatgpt.com") || url.includes("chat.openai.com"))
+    return "chatgpt";
+  if (url.includes("gemini.google.com")) return "gemini";
+  if (url.includes("claude.ai")) return "claude";
+  return null;
+};
+
+const getStatusIcon = (status: Task["status"]) => {
+  switch (status) {
+    case "pending":
+      return <Clock className="w-4 h-4 text-mono-secondary" />;
+    case "running":
+      return <Loader2 className="w-4 h-4 text-mono-primary animate-spin" />;
+    case "done":
+      return <CheckCircle2 className="w-4 h-4 text-mono-primary" />;
+    case "error":
+      return <XCircle className="w-4 h-4 text-mono-secondary opacity-50" />;
+  }
+};
+
+const getPlatformBadge = (platform: AIPlatform) => {
+  switch (platform) {
+    case "chatgpt":
+      return (
+        <span className="text-[8px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/20 font-black uppercase tracking-tighter">
+          ChatGPT
+        </span>
+      );
+    case "gemini":
+      return (
+        <span className="text-[8px] bg-blue-500/10 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/20 font-black uppercase tracking-tighter">
+          Gemini
+        </span>
+      );
+    case "claude":
+      return (
+        <span className="text-[8px] bg-orange-500/10 text-orange-400 px-1.5 py-0.5 rounded border border-orange-500/20 font-black uppercase tracking-tighter">
+          Claude
+        </span>
+      );
+  }
+};
+
+const PLATFORM_DEFAULTS: Record<AIPlatform, string> = {
+  chatgpt: "https://chatgpt.com/",
+  gemini: "https://gemini.google.com/app",
+  claude: "https://claude.ai/new",
+};
+
 const App: React.FC = () => {
   const [state, setState] = useState<QueueState | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [targetUrl, setTargetUrl] = useState("");
   const [selectedPlatform, setSelectedPlatform] =
     useState<AIPlatform>("chatgpt");
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isListActive, setIsListActive] = useState(false);
-  const [isLockedToTab, setIsLockedToTab] = useState(false);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -39,9 +180,25 @@ const App: React.FC = () => {
   } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const activeProject =
-    state?.projects.find((p) => p.id === state.activeProjectId) ||
-    state?.projects[0];
+  const activeProject = React.useMemo(
+    () =>
+      state?.projects?.find((p) => p.id === state?.activeProjectId) ||
+      state?.projects?.[0],
+    [state?.projects, state?.activeProjectId],
+  );
+
+  const activeTasks = React.useMemo(
+    () => state?.tasks?.filter((t) => t.projectId === activeProject?.id) || [],
+    [state?.tasks, activeProject?.id],
+  );
+
+  const otherRunningProjects = React.useMemo(
+    () =>
+      state?.projects?.filter(
+        (p) => p.id !== activeProject?.id && p.isRunning && !p.isPaused,
+      ) || [],
+    [state?.projects, activeProject?.id],
+  );
 
   // Auto-focus prompt input on mount
   useEffect(() => {
@@ -83,7 +240,6 @@ const App: React.FC = () => {
         document.activeElement === textareaRef.current ||
         document.activeElement?.tagName === "INPUT";
 
-      // Shortcuts available everywhere
       if (e.key === "Escape") {
         if (showShortcuts) {
           setShowShortcuts(false);
@@ -95,16 +251,12 @@ const App: React.FC = () => {
         return;
       }
 
-      // Shortcuts available only when NOT in input
       if (!isInputFocused && !showShortcuts) {
         switch (e.key.toLowerCase()) {
-          case "s": // Start / Pause / Resume
+          case "s":
             e.preventDefault();
             if (!activeProject?.isRunning) {
-              if (
-                activeProject?.tasks.filter((t) => t.status === "pending")
-                  .length
-              )
+              if (activeTasks.some((t) => t.status === "pending"))
                 handleStart();
             } else if (activeProject?.isPaused) {
               handleResume();
@@ -112,49 +264,38 @@ const App: React.FC = () => {
               handlePause();
             }
             break;
-          case "c": // Clear
+          case "c":
             e.preventDefault();
             handleClear();
             break;
-          case "i": // Focus Input (Insert mode)
+          case "i":
             e.preventDefault();
             setIsListActive(false);
             textareaRef.current?.focus();
             break;
-          case "j": // Select Next
+          case "j":
           case "arrowdown":
             e.preventDefault();
             setIsListActive(true);
             setSelectedIndex((prev) =>
-              Math.min((activeProject?.tasks.length || 1) - 1, prev + 1),
+              Math.min(activeTasks.length - 1, prev + 1),
             );
             break;
-          case "k": // Select Previous
+          case "k":
           case "arrowup":
             e.preventDefault();
             setIsListActive(true);
             setSelectedIndex((prev) => Math.max(0, prev - 1));
             break;
-          case "delete": // Delete Selected
+          case "delete":
             e.preventDefault();
-            if (activeProject?.tasks[selectedIndex]) {
-              handleRemove(activeProject.tasks[selectedIndex].id);
+            if (activeTasks[selectedIndex]) {
+              handleRemove(activeTasks[selectedIndex].id);
             }
             break;
-          case "?": // Show Shortcuts
+          case "?":
             e.preventDefault();
             setShowShortcuts(true);
-            break;
-          case "l": // Lock to Tab
-            if (e.altKey) {
-              e.preventDefault();
-              if (currentTab) {
-                const newLocked = !isLockedToTab;
-                setIsLockedToTab(newLocked);
-                if (newLocked) setTargetUrl(currentTab.url);
-                else setTargetUrl("");
-              }
-            }
             break;
         }
       }
@@ -168,47 +309,37 @@ const App: React.FC = () => {
   }, [
     state,
     activeProject,
+    activeTasks,
     showShortcuts,
     selectedIndex,
     isListActive,
-    isLockedToTab,
     currentTab,
   ]);
 
-  const getPlatformFromUrl = (url: string): AIPlatform | null => {
-    if (url.includes("chatgpt.com") || url.includes("chat.openai.com")) return "chatgpt";
-    if (url.includes("gemini.google.com")) return "gemini";
-    if (url.includes("claude.ai")) return "claude";
-    return null;
-  };
-
-  // Sync platform when locked or URL changes
+  // Sync platform when URL changes
   useEffect(() => {
-    if (isLockedToTab || targetUrl) {
-      const detected = getPlatformFromUrl(targetUrl || currentTab?.url || "");
-      if (detected) {
-        setSelectedPlatform(detected);
-      }
+    const targetUrl = activeProject?.targetUrl || currentTab?.url || "";
+    const detected = getPlatformFromUrl(targetUrl);
+    if (detected) {
+      setSelectedPlatform(detected);
     }
-  }, [isLockedToTab, targetUrl, currentTab]);
+  }, [activeProject?.targetUrl, currentTab]);
 
-  const handleAddPrompt = async () => {
+  const handleAddPrompt = React.useCallback(async () => {
     if (!prompt.trim()) return;
-    const finalTargetUrl =
-      targetUrl.trim() || (isLockedToTab ? currentTab?.url : undefined);
+
     await sendMessageToBackground({
       type: "ADD_TASK",
       payload: {
         prompt,
         platform: selectedPlatform,
-        targetUrl: finalTargetUrl,
       },
     });
-    setPrompt("");
-    setTargetUrl("");
-  };
 
-  const handleCreateProject = async () => {
+    setPrompt("");
+  }, [prompt, selectedPlatform, activeProject?.id]);
+
+  const handleCreateProject = React.useCallback(async () => {
     if (!newProjectName.trim()) return;
     await sendMessageToBackground({
       type: "CREATE_PROJECT",
@@ -216,60 +347,52 @@ const App: React.FC = () => {
     });
     setNewProjectName("");
     setIsCreatingProject(false);
-  };
+  }, [newProjectName]);
 
-  const handleSwitchProject = async (id: string) => {
+  const handleSwitchProject = React.useCallback(async (id: string) => {
     await sendMessageToBackground({ type: "SWITCH_PROJECT", payload: id });
     setIsProjectMenuOpen(false);
-  };
+    setSelectedIndex(0);
+  }, []);
 
-  const handleDeleteProject = async (id: string) => {
-    if (state && state.projects.length <= 1) return;
-    await sendMessageToBackground({ type: "DELETE_PROJECT", payload: id });
-  };
+  const handleDeleteProject = React.useCallback(
+    async (id: string) => {
+      if (state && state.projects.length <= 1) return;
+      await sendMessageToBackground({ type: "DELETE_PROJECT", payload: id });
+    },
+    [state?.projects.length],
+  );
 
-  const getPlatformBadge = (platform: AIPlatform) => {
-    switch (platform) {
-      case "chatgpt":
-        return (
-          <span className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">
-            ChatGPT
-          </span>
-        );
-      case "gemini":
-        return (
-          <span className="bg-blue-500/10 text-blue-500 border border-blue-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">
-            Gemini
-          </span>
-        );
-      case "claude":
-        return (
-          <span className="bg-orange-500/10 text-orange-500 border border-orange-500/20 px-1.5 py-0.5 rounded text-[8px] font-black uppercase">
-            Claude
-          </span>
-        );
+  const handleStart = React.useCallback(
+    () => sendMessageToBackground({ type: "START_QUEUE" }),
+    [],
+  );
+  const handlePause = React.useCallback(
+    () => sendMessageToBackground({ type: "PAUSE_QUEUE" }),
+    [],
+  );
+  const handleResume = React.useCallback(
+    () => sendMessageToBackground({ type: "RESUME_QUEUE" }),
+    [],
+  );
+  const handleClear = React.useCallback(
+    () => sendMessageToBackground({ type: "CLEAR_QUEUE" }),
+    [],
+  );
+  const handleRemove = React.useCallback(
+    (id: string) =>
+      sendMessageToBackground({ type: "REMOVE_TASK", payload: id }),
+    [],
+  );
+
+  const handleJumpToChat = React.useCallback(() => {
+    if (activeProject?.targetUrl) {
+      sendMessageToBackground({
+        type: "FOCUS_TAB",
+        payload: activeProject.targetUrl,
+      });
     }
-  };
-
-  const handleStart = () => sendMessageToBackground({ type: "START_QUEUE" });
-  const handlePause = () => sendMessageToBackground({ type: "PAUSE_QUEUE" });
-  const handleResume = () => sendMessageToBackground({ type: "RESUME_QUEUE" });
-  const handleClear = () => sendMessageToBackground({ type: "CLEAR_QUEUE" });
-  const handleRemove = (id: string) =>
-    sendMessageToBackground({ type: "REMOVE_TASK", payload: id });
-
-  const getStatusIcon = (status: Task["status"]) => {
-    switch (status) {
-      case "pending":
-        return <Clock className="w-4 h-4 text-mono-secondary" />;
-      case "running":
-        return <Loader2 className="w-4 h-4 text-mono-primary animate-spin" />;
-      case "done":
-        return <CheckCircle2 className="w-4 h-4 text-mono-primary" />;
-      case "error":
-        return <XCircle className="w-4 h-4 text-mono-secondary opacity-50" />;
-    }
-  };
+  }, [activeProject?.targetUrl]);
 
   if (!state) return <div className="p-4 text-center">Loading...</div>;
 
@@ -293,13 +416,27 @@ const App: React.FC = () => {
             </button>
 
             {activeProject?.targetUrl && (
-               <button 
-                onClick={() => sendMessageToBackground({ type: 'CLEAR_PROJECT_LOCK', payload: activeProject.id })}
-                className="absolute -right-2 -top-1 w-4 h-4 bg-white text-black rounded-full flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors shadow-lg z-10"
-                title="Clear Project Sticky Chat"
-               >
-                 <Link2 className="w-2.5 h-2.5" />
-               </button>
+              <div className="flex gap-1 ml-1">
+                <button
+                  onClick={handleJumpToChat}
+                  className="w-5 h-5 bg-mono-main border border-mono rounded-md flex items-center justify-center hover:bg-white hover:text-black transition-all shadow-sm"
+                  title="Jump to Sticky Chat"
+                >
+                  <ExternalLink className="w-2.5 h-2.5" />
+                </button>
+                <button
+                  onClick={() =>
+                    sendMessageToBackground({
+                      type: "CLEAR_PROJECT_LOCK",
+                      payload: activeProject.id,
+                    })
+                  }
+                  className="w-5 h-5 bg-mono-main border border-mono rounded-md flex items-center justify-center hover:bg-red-500 hover:text-white transition-all shadow-sm group/clear"
+                  title="Clear Project Lock"
+                >
+                  <Link2 className="w-2.5 h-2.5 opacity-40 group-hover/clear:opacity-100" />
+                </button>
+              </div>
             )}
 
             {isProjectMenuOpen && (
@@ -315,7 +452,7 @@ const App: React.FC = () => {
                     </p>
                   </div>
                   <div className="max-h-64 overflow-y-auto custom-scroll">
-                    {state.projects.map((p) => (
+                    {state?.projects?.map((p) => (
                       <div
                         key={p.id}
                         className="group/item flex items-center justify-between p-1 px-2 hover:bg-mono-hover"
@@ -332,7 +469,9 @@ const App: React.FC = () => {
                           >
                             {p.name}
                           </span>
-                          {p.targetUrl && <Link2 className="w-2.5 h-2.5 text-mono-secondary" />}
+                          {p.targetUrl && (
+                            <Link2 className="w-2.5 h-2.5 text-mono-secondary" />
+                          )}
                         </button>
                         <button
                           onClick={() => handleDeleteProject(p.id)}
@@ -455,6 +594,34 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Global Activity Bar */}
+      {otherRunningProjects.length > 0 && (
+        <div className="bg-mono-sidebar border-b border-mono p-1 px-4 flex items-center gap-4 overflow-hidden">
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="relative">
+              <Activity className="w-3 h-3 text-white" />
+              <div className="absolute inset-0 bg-white/20 rounded-full animate-ping" />
+            </div>
+            <span className="text-[8px] font-black uppercase tracking-widest">
+              Global Activity
+            </span>
+          </div>
+          <div className="flex gap-2 animate-in fade-in slide-in-from-left duration-1000">
+            {otherRunningProjects.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center gap-1.5 bg-mono-main border border-mono rounded-full px-2 py-0.5 max-w-[120px]"
+              >
+                <div className="w-1 h-1 bg-white rounded-full animate-pulse" />
+                <span className="text-[8px] font-bold truncate opacity-60">
+                  {p.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Main Layout */}
       <div className="flex-1 flex flex-col min-h-0 ">
         {/* Fixed Input Area */}
@@ -463,26 +630,44 @@ const App: React.FC = () => {
             <span className="text-[10px] text-mono-secondary font-black uppercase tracking-[0.2em]">
               Add Prompt
             </span>
-            {currentTab && (
+            {activeProject && (
               <button
                 onClick={() => {
-                  const newLocked = !isLockedToTab;
-                  setIsLockedToTab(newLocked);
-                  if (newLocked) setTargetUrl(currentTab.url);
-                  else setTargetUrl("");
+                  if (activeProject.targetUrl) {
+                    sendMessageToBackground({
+                      type: "CLEAR_PROJECT_LOCK",
+                      payload: activeProject.id,
+                    });
+                  } else {
+                    const currentPlatform = getPlatformFromUrl(
+                      currentTab?.url || "",
+                    );
+                    const targetUrl =
+                      currentPlatform === selectedPlatform
+                        ? currentTab?.url || PLATFORM_DEFAULTS[selectedPlatform]
+                        : PLATFORM_DEFAULTS[selectedPlatform];
+
+                    sendMessageToBackground({
+                      type: "UPDATE_PROJECT_TARGET_URL",
+                      payload: {
+                        id: activeProject.id,
+                        targetUrl: targetUrl,
+                      },
+                    });
+                  }
                 }}
                 className={`flex items-center gap-1.5 text-[9px] font-black px-2.5 py-1 rounded-lg transition-all uppercase tracking-tighter ${
-                  isLockedToTab
+                  activeProject?.targetUrl
                     ? "bg-white text-black"
-                    : "bg-mono-sidebar text-mono-secondary border border-mono"
+                    : "bg-mono-sidebar text-mono-secondary border border-mono hover:border-white"
                 }`}
               >
-                {isLockedToTab ? (
+                {activeProject?.targetUrl ? (
                   <Link2 className="w-3 h-3" />
                 ) : (
                   <Globe className="w-3 h-3" />
                 )}
-                {isLockedToTab ? "Locked" : "Any Chat"}
+                {activeProject?.targetUrl ? "Locked" : "Lock Chat"}
               </button>
             )}
           </div>
@@ -490,7 +675,7 @@ const App: React.FC = () => {
           {/* Platform Selector */}
           <div className="flex gap-2">
             {(["chatgpt", "gemini", "claude"] as AIPlatform[]).map((p) => {
-              const isDisabled = isLockedToTab || !!activeProject?.targetUrl;
+              const isDisabled = !!activeProject?.targetUrl;
               return (
                 <button
                   key={p}
@@ -508,16 +693,35 @@ const App: React.FC = () => {
             })}
           </div>
 
-          {isLockedToTab && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-mono-sidebar border border-mono rounded-lg animate-in slide-in-from-top-2 duration-300">
-              <Globe className="w-3 h-3 text-mono-secondary shrink-0" />
+          {activeProject?.targetUrl && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-mono-sidebar border border-mono rounded-lg animate-in slide-in-from-top-2 duration-300">
+              <Link2 className="w-2.5 h-2.5 text-mono-secondary shrink-0" />
               <input
                 type="text"
-                value={targetUrl}
-                onChange={(e) => setTargetUrl(e.target.value)}
-                placeholder="chatgpt.com/c/..."
-                className="flex-1 bg-transparent border-none text-[10px] text-mono-primary focus:outline-none focus:ring-0 placeholder:text-neutral-700 font-mono"
+                value={activeProject.targetUrl || ""}
+                onChange={(e) =>
+                  sendMessageToBackground({
+                    type: "UPDATE_PROJECT_TARGET_URL",
+                    payload: {
+                      id: activeProject.id,
+                      targetUrl: e.target.value,
+                    },
+                  })
+                }
+                placeholder="Paste specific chat URL here..."
+                className="flex-1 bg-transparent border-none text-[8px] font-bold text-mono-primary focus:outline-none focus:ring-0 placeholder:text-neutral-700 tracking-tight"
               />
+              <button
+                onClick={() =>
+                  sendMessageToBackground({
+                    type: "CLEAR_PROJECT_LOCK",
+                    payload: activeProject.id,
+                  })
+                }
+                className="text-[8px] font-black uppercase text-red-500/60 hover:text-red-500 transition-colors"
+              >
+                Unlock
+              </button>
             </div>
           )}
 
@@ -559,8 +763,7 @@ const App: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-5 space-y-3 custom-scroll">
           <div className="flex justify-between items-center text-[10px] text-mono-secondary font-black uppercase tracking-[0.2em] px-1 mb-2">
             <span>
-              {activeProject?.name || "Queue"} (
-              {activeProject?.tasks.length || 0})
+              {activeProject?.name || "Queue"} ({activeTasks.length || 0})
             </span>
             {activeProject?.isRunning && (
               <span className="flex items-center gap-2 text-white">
@@ -571,64 +774,22 @@ const App: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {!activeProject || activeProject.tasks.length === 0 ? (
+            {activeTasks.length === 0 ? (
               <div className="text-center py-12 border border-dashed border-mono rounded-2xl text-mono-secondary text-[10px] font-bold uppercase tracking-widest opacity-40">
                 Queue Empty
               </div>
             ) : (
-              activeProject.tasks.map((task, index) => (
-                <div
+              activeTasks.map((task, index) => (
+                <TaskItem
                   key={task.id}
-                  className={`group relative border rounded-lg p-4 py-2 bg-mono-sidebar transition-all duration-300 ${
-                    index === selectedIndex && isListActive
-                      ? "ring-1 ring-white border-transparent shadow-[0_0_20px_rgba(255,255,255,0.05)]"
-                      : "border-mono"
-                  } ${
-                    task.status === "running"
-                      ? "bg-white text-black"
-                      : "hover:border-neutral-500"
-                  }`}
-                >
-                  <div className="flex gap-4">
-                    <div className="mt-1">{getStatusIcon(task.status)}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {getPlatformBadge(task.platform)}
-                      </div>
-                      <p
-                        className={`text-xs font-medium leading-relaxed break-words ${task.status === "running" ? "text-black" : "text-mono-primary"}`}
-                      >
-                        {task.prompt}
-                      </p>
-                      {task.targetUrl && (
-                        <div
-                          className={`flex items-center gap-1.5 text-[9px] font-bold mt-2 uppercase tracking-tighter opacity-60`}
-                        >
-                          <Globe className="w-3 h-3" />
-                          <span className="truncate max-w-[140px]">
-                            {task.targetUrl.split("/").pop() || "Specific Chat"}
-                          </span>
-                        </div>
-                      )}
-                      {task.error && (
-                        <p className="text-[10px] text-red-500 mt-2 font-bold uppercase tracking-tighter">
-                          Error: {task.error}
-                        </p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => handleRemove(task.id)}
-                      className={`p-2 rounded-lg transition-all ${
-                        task.status === "running"
-                          ? "hover:bg-black/5 text-black/40 hover:text-black"
-                          : "hover:bg-mono-hover text-mono-secondary hover:text-red-500 opacity-0 group-hover:opacity-100"
-                      }`}
-                      title="Remove Task"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
+                  task={task}
+                  index={index}
+                  selectedIndex={selectedIndex}
+                  isListActive={isListActive}
+                  onRemove={handleRemove}
+                  getStatusIcon={getStatusIcon}
+                  getPlatformBadge={getPlatformBadge}
+                />
               ))
             )}
           </div>
@@ -642,8 +803,7 @@ const App: React.FC = () => {
             onClick={handleStart}
             disabled={
               !activeProject ||
-              activeProject.tasks.filter((t) => t.status === "pending")
-                .length === 0
+              activeTasks.filter((t) => t.status === "pending").length === 0
             }
             className="w-full bg-white hover:bg-neutral-200 disabled:opacity-20 py-3 rounded-lg flex items-center justify-center gap-3 text-xs font-black uppercase tracking-[0.2em] text-black transition-all transform active:scale-[0.98] shadow-xl shadow-black/80"
             title="Start (S)"
@@ -653,7 +813,7 @@ const App: React.FC = () => {
           </button>
         ) : (
           <div className="flex gap-3">
-            {activeProject.isPaused ? (
+            {activeProject?.isPaused ? (
               <button
                 onClick={handleResume}
                 className="flex-1 bg-white hover:bg-neutral-200 text-black py-3 rounded-lg flex items-center justify-center gap-3 text-xs font-black uppercase tracking-[0.2em] transition-all transform active:scale-[0.98]"

@@ -65,6 +65,16 @@ async function handleMessage(message: MessageType) {
     case 'CLEAR_PROJECT_LOCK':
       await queueManager.clearProjectLock(message.payload);
       return { success: true };
+    case 'UPDATE_PROJECT_TARGET_URL':
+      await queueManager.updateProjectTargetUrl(message.payload.id, message.payload.targetUrl);
+      return { success: true };
+    case 'FOCUS_TAB':
+      const tabs = await chrome.tabs.query({ url: message.payload });
+      if (tabs.length > 0) {
+        chrome.tabs.update(tabs[0].id!, { active: true });
+        chrome.windows.update(tabs[0].windowId, { focused: true });
+      }
+      return { success: true };
     default:
       return null;
   }

@@ -4,19 +4,19 @@ export type AIPlatform = 'chatgpt' | 'gemini' | 'claude';
 
 export interface Task {
   id: string;
+  projectId: string;
   prompt: string;
   status: TaskStatus;
   platform: AIPlatform;
-  targetUrl?: string;
   error?: string;
   response?: string;
+  statusDetail?: string;
   completedAt?: number;
 }
 
 export interface Project {
   id: string;
   name: string;
-  tasks: Task[];
   isPaused: boolean;
   isRunning: boolean;
   currentTaskId: string | null;
@@ -26,11 +26,12 @@ export interface Project {
 
 export interface QueueState {
   projects: Project[];
+  tasks: Task[];
   activeProjectId: string;
 }
 
 export type MessageType = 
-  | { type: 'ADD_TASK'; payload: { prompt: string; platform: AIPlatform; targetUrl?: string } }
+  | { type: 'ADD_TASK'; payload: { prompt: string; platform: AIPlatform } }
   | { type: 'REMOVE_TASK'; payload: string }
   | { type: 'CLEAR_QUEUE' }
   | { type: 'START_QUEUE' }
@@ -45,7 +46,9 @@ export type MessageType =
   | { type: 'SWITCH_PROJECT'; payload: string }
   | { type: 'DELETE_PROJECT'; payload: string }
   | { type: 'UPDATE_PROJECT_NAME'; payload: { id: string; name: string } }
-  | { type: 'CLEAR_PROJECT_LOCK'; payload: string };
+  | { type: 'CLEAR_PROJECT_LOCK'; payload: string }
+  | { type: 'UPDATE_PROJECT_TARGET_URL'; payload: { id: string; targetUrl: string } }
+  | { type: 'FOCUS_TAB'; payload: string };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);

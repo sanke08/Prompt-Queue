@@ -1,7 +1,7 @@
 import type { PlatformAdapter } from './adapter';
 
-export const waitForCompletion = (adapter: PlatformAdapter, timeout = 120000): Promise<void> => {
-  return new Promise((resolve, reject) => {
+export const waitForCompletion = (adapter: PlatformAdapter): Promise<void> => {
+  return new Promise((resolve) => {
     let checkInterval: any;
     let observer: MutationObserver;
     
@@ -10,16 +10,15 @@ export const waitForCompletion = (adapter: PlatformAdapter, timeout = 120000): P
       if (observer) observer.disconnect();
     };
 
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error('Timeout waiting for completion'));
-    }, timeout);
-
     const check = () => {
       if (!adapter.isGenerating()) {
-        cleanup();
-        clearTimeout(timer);
-        resolve();
+        // Small stability delay to ensure UI has settled
+        setTimeout(() => {
+           if (!adapter.isGenerating()) {
+             cleanup();
+             resolve();
+           }
+        }, 2000);
       }
     };
 
