@@ -43,12 +43,29 @@ async function handleExecutePrompt(prompt: string) {
   }
 
   try {
-    const input = adapter.findInput();
-    if (!input) {
-      return { success: false, error: `Could not find input box on ${adapter.name}` };
+    // 1. Wait for input box to appear (SPAs can be slow)
+    let input: HTMLElement | null = null;
+    let retries = 30; // 15 seconds total
+    
+    while (retries > 0) {
+      input = adapter.findInput();
+      if (input) break;
+      
+      // Check for Sign-in buttons while waiting
+      const isSignedOut = !!document.querySelector('a[href*="accounts.google.com"], [href*="login"], [href*="sign-in"], .sign-in-button');
+      if (isSignedOut && !document.querySelector('rich-textarea, .ql-editor, textarea')) {
+         return { success: false, error: "Please sign in to the AI platform first." };
+      }
+
+      await new Promise(r => setTimeout(r, 500));
+      retries--;
     }
 
-    // Check if input is empty to avoid overwriting user's active typing
+    if (!input) {
+      return { success: false, error: `Could not find input box on ${adapter.name}. Please ensure you are logged in.` };
+    }
+
+    // 2. Check if input is empty to avoid overwriting user's active typing
     const currentText = (input as any).innerText || (input as any).value || "";
     if (currentText.trim().length > 0) {
       return { success: false, error: "Input is not empty (User may be typing). Retrying..." };
@@ -57,7 +74,7 @@ async function handleExecutePrompt(prompt: string) {
     adapter.setInputValue(input, prompt);
 
     // Delay to let the framework pick up the value
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 800));
 
     const sent = adapter.send();
     if (!sent) {
@@ -65,7 +82,7 @@ async function handleExecutePrompt(prompt: string) {
     }
 
     // Wait for generation to start
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 1500));
 
     // Wait for completion
     await waitForCompletion(adapter);

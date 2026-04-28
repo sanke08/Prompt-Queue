@@ -71,19 +71,19 @@ const TaskItem = React.memo(
             <div className="flex items-center gap-2 mb-1">
               {getPlatformBadge(task.platform)}
               {isRunning && (
-                <span className="text-[8px] font-black uppercase tracking-widest text-mono-primary animate-pulse">
+                <span className={`text-[8px] font-black uppercase tracking-widest animate-pulse ${isRunning ? 'text-black' : 'text-mono-primary'}`}>
                   Active
                 </span>
               )}
             </div>
             <p
-              className={`text-xs font-medium leading-relaxed break-words transition-colors text-mono-primary`}
+              className={`text-xs font-medium leading-relaxed break-words transition-colors ${isRunning ? 'text-black' : 'text-mono-primary'}`}
             >
               {task.prompt}
             </p>
             {task.statusDetail && (
               <p
-                className={`text-[9px] mt-1 font-bold uppercase tracking-tighter opacity-60 flex items-center gap-1 text-mono-primary`}
+                className={`text-[9px] mt-1 font-bold uppercase tracking-tighter opacity-60 flex items-center gap-1 ${isRunning ? 'text-black/60' : 'text-mono-secondary'}`}
               >
                 <Activity className="w-2.5 h-2.5" />
                 {task.statusDetail}

@@ -297,17 +297,26 @@ export class Worker {
 
       if (matchingTab) {
         await chrome.tabs.update(matchingTab.id!, { active: true });
+        if (matchingTab.windowId) {
+          await chrome.windows.update(matchingTab.windowId, { focused: true });
+        }
         return this.waitForTabComplete(matchingTab.id!);
       }
 
       // If specific lock tab not found, try any platform tab or create new
-      const platformTabs = await chrome.tabs.query({ url: config.patterns });
-      if (platformTabs.length > 0) {
-        const tab = platformTabs[0];
+      const platformTabsFound = await chrome.tabs.query({ url: config.patterns });
+      if (platformTabsFound.length > 0) {
+        const tab = platformTabsFound[0];
         await chrome.tabs.update(tab.id!, { active: true, url: targetUrl });
+        if (tab.windowId) {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
         return this.waitForTabComplete(tab.id!);
       }
-      const tab = await chrome.tabs.create({ url: targetUrl });
+      const tab = await chrome.tabs.create({ url: targetUrl, active: true });
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      }
       return this.waitForTabComplete(tab.id!);
     }
 
@@ -321,17 +330,24 @@ export class Worker {
 
     if (cleanTab) {
       await chrome.tabs.update(cleanTab.id!, { active: true });
+      if (cleanTab.windowId) {
+        await chrome.windows.update(cleanTab.windowId, { focused: true });
+      }
       return cleanTab;
     }
 
     // No clean tab found. Create a BRAND NEW tab to avoid hijacking user's existing chats.
-    const tab = await chrome.tabs.create({ url: config.defaultUrl });
+    const tab = await chrome.tabs.create({ url: config.defaultUrl, active: true });
+    if (tab.windowId) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
     return this.waitForTabComplete(tab.id!);
   }
 
   private async waitForTabComplete(tabId: number): Promise<chrome.tabs.Tab> {
     const tab = await chrome.tabs.get(tabId);
     if (tab.status === "complete") {
+      await new Promise(r => setTimeout(r, 500)); // Small settle delay
       return tab;
     }
 
