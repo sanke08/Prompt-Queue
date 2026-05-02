@@ -1,6 +1,6 @@
 import { QueueManager } from './queueManager';
 import { Worker } from './worker';
-import type { MessageType } from '../utils/messaging';
+import { isProjectLocked, type MessageType } from '../utils/messaging';
 
 const queueManager = new QueueManager();
 const worker = new Worker(queueManager);
@@ -62,12 +62,22 @@ async function handleMessage(message: MessageType) {
     case 'UPDATE_PROJECT_NAME':
       await queueManager.updateProjectName(message.payload.id, message.payload.name);
       return { success: true };
-    case 'CLEAR_PROJECT_LOCK':
+    case 'CLEAR_PROJECT_LOCK': {
+      const project = queueManager.getState().projects.find(p => p.id === message.payload);
+      if (isProjectLocked(project)) {
+        return { success: false, error: 'Project is locked to a chat and cannot be unlocked.' };
+      }
       await queueManager.clearProjectLock(message.payload);
       return { success: true };
-    case 'UPDATE_PROJECT_TARGET_URL':
+    }
+    case 'UPDATE_PROJECT_TARGET_URL': {
+      const project = queueManager.getState().projects.find(p => p.id === message.payload.id);
+      if (isProjectLocked(project)) {
+        return { success: false, error: 'Project is locked. Target URL cannot be changed.' };
+      }
       await queueManager.updateProjectTargetUrl(message.payload.id, message.payload.targetUrl);
       return { success: true };
+    }
     case 'FOCUS_TAB':
       const tabs = await chrome.tabs.query({ url: message.payload });
       if (tabs.length > 0) {

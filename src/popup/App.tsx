@@ -20,7 +20,11 @@ import {
   Activity,
 } from "lucide-react";
 import type { QueueState, Task, AIPlatform } from "../utils/messaging";
-import { sendMessageToBackground } from "../utils/messaging";
+import {
+  sendMessageToBackground,
+  isProjectLocked,
+  getPlatformFromUrl,
+} from "../utils/messaging";
 
 // Memoized Task Item Component for performance
 const TaskItem = React.memo(
@@ -112,15 +116,6 @@ const TaskItem = React.memo(
   },
 );
 
-const getPlatformFromUrl = (url: string): AIPlatform | null => {
-  if (!url) return null;
-  if (url.includes("chatgpt.com") || url.includes("chat.openai.com"))
-    return "chatgpt";
-  if (url.includes("gemini.google.com")) return "gemini";
-  if (url.includes("claude.ai")) return "claude";
-  return null;
-};
-
 const getStatusIcon = (status: Task["status"]) => {
   switch (status) {
     case "pending":
@@ -157,12 +152,6 @@ const getPlatformBadge = (platform: AIPlatform) => {
   }
 };
 
-const PLATFORM_DEFAULTS: Record<AIPlatform, string> = {
-  chatgpt: "https://chatgpt.com/",
-  gemini: "https://gemini.google.com/app",
-  claude: "https://claude.ai/new",
-};
-
 const App: React.FC = () => {
   const [state, setState] = useState<QueueState | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -191,6 +180,18 @@ const App: React.FC = () => {
     () => state?.tasks?.filter((t) => t.projectId === activeProject?.id) || [],
     [state?.tasks, activeProject?.id],
   );
+
+  const projectLocked = React.useMemo(
+    () => isProjectLocked(activeProject),
+    [activeProject?.targetUrl],
+  );
+
+  const lockedPlatform = React.useMemo<AIPlatform | null>(
+    () => (projectLocked ? getPlatformFromUrl(activeProject?.targetUrl) : null),
+    [projectLocked, activeProject?.targetUrl],
+  );
+
+  const effectivePlatform: AIPlatform = lockedPlatform ?? selectedPlatform;
 
   const otherRunningProjects = React.useMemo(
     () =>
@@ -332,12 +333,12 @@ const App: React.FC = () => {
       type: "ADD_TASK",
       payload: {
         prompt,
-        platform: selectedPlatform,
+        platform: effectivePlatform,
       },
     });
 
     setPrompt("");
-  }, [prompt, selectedPlatform, activeProject?.id]);
+  }, [prompt, effectivePlatform, activeProject?.id]);
 
   const handleCreateProject = React.useCallback(async () => {
     if (!newProjectName.trim()) return;
@@ -415,7 +416,7 @@ const App: React.FC = () => {
               />
             </button>
 
-            {activeProject?.targetUrl && (
+            {projectLocked && (
               <div className="flex gap-1 ml-1">
                 <button
                   onClick={handleJumpToChat}
@@ -424,18 +425,12 @@ const App: React.FC = () => {
                 >
                   <ExternalLink className="w-2.5 h-2.5" />
                 </button>
-                <button
-                  onClick={() =>
-                    sendMessageToBackground({
-                      type: "CLEAR_PROJECT_LOCK",
-                      payload: activeProject.id,
-                    })
-                  }
-                  className="w-5 h-5 bg-mono-main border border-mono rounded-md flex items-center justify-center hover:bg-red-500 hover:text-white transition-all shadow-sm group/clear"
-                  title="Clear Project Lock"
+                <div
+                  className="w-5 h-5 bg-mono-main border border-mono rounded-md flex items-center justify-center shadow-sm"
+                  title="Project is locked to this chat"
                 >
-                  <Link2 className="w-2.5 h-2.5 opacity-40 group-hover/clear:opacity-100" />
-                </button>
+                  <Link2 className="w-2.5 h-2.5" />
+                </div>
               </div>
             )}
 
@@ -630,62 +625,50 @@ const App: React.FC = () => {
             <span className="text-[10px] text-mono-secondary font-black uppercase tracking-[0.2em]">
               Add Prompt
             </span>
-            {activeProject && (
-              <button
-                onClick={() => {
-                  if (activeProject.targetUrl) {
-                    sendMessageToBackground({
-                      type: "CLEAR_PROJECT_LOCK",
-                      payload: activeProject.id,
-                    });
-                  } else {
-                    const currentPlatform = getPlatformFromUrl(
-                      currentTab?.url || "",
-                    );
-                    const targetUrl =
-                      currentPlatform === selectedPlatform
-                        ? currentTab?.url || PLATFORM_DEFAULTS[selectedPlatform]
-                        : PLATFORM_DEFAULTS[selectedPlatform];
-
-                    sendMessageToBackground({
-                      type: "UPDATE_PROJECT_TARGET_URL",
-                      payload: {
-                        id: activeProject.id,
-                        targetUrl: targetUrl,
-                      },
-                    });
-                  }
-                }}
-                className={`flex items-center gap-1.5 text-[9px] font-black px-2.5 py-1 rounded-lg transition-all uppercase tracking-tighter ${
-                  activeProject?.targetUrl
-                    ? "bg-white text-black"
-                    : "bg-mono-sidebar text-mono-secondary border border-mono hover:border-white"
-                }`}
+            {activeProject && projectLocked && (
+              <div
+                className="flex items-center gap-1.5 text-[9px] font-black px-2.5 py-1 rounded-lg uppercase tracking-tighter bg-white text-black"
+                title="This project is locked to a chat. Model and chat ID cannot be changed."
               >
-                {activeProject?.targetUrl ? (
-                  <Link2 className="w-3 h-3" />
-                ) : (
-                  <Globe className="w-3 h-3" />
-                )}
-                {activeProject?.targetUrl ? "Locked" : "Lock Chat"}
-              </button>
+                <Link2 className="w-3 h-3" />
+                Locked
+              </div>
+            )}
+            {activeProject && !projectLocked && (
+              <span
+                className="flex items-center gap-1.5 text-[9px] font-black px-2.5 py-1 rounded-lg uppercase tracking-tighter bg-mono-sidebar text-mono-secondary border border-mono"
+                title="The first task will lock this project to its chat and model."
+              >
+                <Globe className="w-3 h-3" />
+                Auto-Lock On First Run
+              </span>
             )}
           </div>
 
           {/* Platform Selector */}
           <div className="flex gap-2">
             {(["chatgpt", "gemini", "claude"] as AIPlatform[]).map((p) => {
-              const isDisabled = !!activeProject?.targetUrl;
+              const isLocked = projectLocked;
+              const isActive = isLocked
+                ? lockedPlatform === p
+                : selectedPlatform === p;
               return (
                 <button
                   key={p}
-                  disabled={isDisabled}
-                  onClick={() => setSelectedPlatform(p)}
+                  disabled={isLocked}
+                  onClick={() => {
+                    if (!isLocked) setSelectedPlatform(p);
+                  }}
+                  title={
+                    isLocked
+                      ? "Platform is locked to this project's chat"
+                      : undefined
+                  }
                   className={`flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
-                    selectedPlatform === p
+                    isActive
                       ? "bg-white text-black shadow-md"
                       : "bg-mono-sidebar text-mono-secondary"
-                  } ${isDisabled ? "opacity-50 cursor-not-allowed" : "hover:border-neutral-500 border border-transparent"}`}
+                  } ${isLocked ? (isActive ? "" : "opacity-30") + " cursor-not-allowed" : "hover:border-neutral-500 border border-transparent"}`}
                 >
                   {p}
                 </button>
@@ -693,35 +676,18 @@ const App: React.FC = () => {
             })}
           </div>
 
-          {activeProject?.targetUrl && (
+          {projectLocked && activeProject?.targetUrl && (
             <div className="flex items-center gap-2 px-3 py-1 bg-mono-sidebar border border-mono rounded-lg animate-in slide-in-from-top-2 duration-300">
               <Link2 className="w-2.5 h-2.5 text-mono-secondary shrink-0" />
-              <input
-                type="text"
-                value={activeProject.targetUrl || ""}
-                onChange={(e) =>
-                  sendMessageToBackground({
-                    type: "UPDATE_PROJECT_TARGET_URL",
-                    payload: {
-                      id: activeProject.id,
-                      targetUrl: e.target.value,
-                    },
-                  })
-                }
-                placeholder="Paste specific chat URL here..."
-                className="flex-1 bg-transparent border-none text-[8px] font-bold text-mono-primary focus:outline-none focus:ring-0 placeholder:text-neutral-700 tracking-tight"
-              />
-              <button
-                onClick={() =>
-                  sendMessageToBackground({
-                    type: "CLEAR_PROJECT_LOCK",
-                    payload: activeProject.id,
-                  })
-                }
-                className="text-[8px] font-black uppercase text-red-500/60 hover:text-red-500 transition-colors"
+              <span
+                className="flex-1 text-[8px] font-bold text-mono-primary tracking-tight truncate"
+                title={activeProject.targetUrl}
               >
-                Unlock
-              </button>
+                {activeProject.targetUrl}
+              </span>
+              <span className="text-[8px] font-black uppercase text-mono-secondary">
+                Locked
+              </span>
             </div>
           )}
 

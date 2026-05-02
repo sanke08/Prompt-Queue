@@ -30,6 +30,41 @@ export interface QueueState {
   activeProjectId: string;
 }
 
+export function isNewChatUrl(url: string | undefined | null): boolean {
+  if (!url) return true;
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    const path = u.pathname.replace(/\/+$/, "") || "/";
+
+    if (host.includes("chatgpt.com") || host.includes("chat.openai.com")) {
+      return path === "/" || path === "";
+    }
+    if (host.includes("gemini.google.com")) {
+      return path === "/app" || path.endsWith("/app") || path === "/u/0/app" || path === "/";
+    }
+    if (host.includes("claude.ai")) {
+      return path === "/new" || path === "/chat" || path === "/" || path === "";
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export function isProjectLocked(project: Pick<Project, "targetUrl"> | null | undefined): boolean {
+  if (!project || !project.targetUrl) return false;
+  return !isNewChatUrl(project.targetUrl);
+}
+
+export function getPlatformFromUrl(url: string | undefined | null): AIPlatform | null {
+  if (!url) return null;
+  if (url.includes("chatgpt.com") || url.includes("chat.openai.com")) return "chatgpt";
+  if (url.includes("gemini.google.com")) return "gemini";
+  if (url.includes("claude.ai")) return "claude";
+  return null;
+}
+
 export type MessageType = 
   | { type: 'ADD_TASK'; payload: { prompt: string; platform: AIPlatform } }
   | { type: 'REMOVE_TASK'; payload: string }
