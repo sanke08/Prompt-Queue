@@ -24,6 +24,7 @@ import {
   sendMessageToBackground,
   isProjectLocked,
   getPlatformFromUrl,
+  validateChatUrl,
 } from "../utils/messaging";
 
 // Memoized Task Item Component for performance
@@ -75,19 +76,21 @@ const TaskItem = React.memo(
             <div className="flex items-center gap-2 mb-1">
               {getPlatformBadge(task.platform)}
               {isRunning && (
-                <span className={`text-[8px] font-black uppercase tracking-widest animate-pulse ${isRunning ? 'text-black' : 'text-mono-primary'}`}>
+                <span
+                  className={`text-[8px] font-black uppercase tracking-widest animate-pulse ${isRunning ? "text-black" : "text-mono-primary"}`}
+                >
                   Active
                 </span>
               )}
             </div>
             <p
-              className={`text-xs font-medium leading-relaxed break-words transition-colors ${isRunning ? 'text-black' : 'text-mono-primary'}`}
+              className={`text-xs font-medium leading-relaxed break-words transition-colors ${isRunning ? "text-black" : "text-mono-primary"}`}
             >
               {task.prompt}
             </p>
             {task.statusDetail && (
               <p
-                className={`text-[9px] mt-1 font-bold uppercase tracking-tighter opacity-60 flex items-center gap-1 ${isRunning ? 'text-black/60' : 'text-mono-secondary'}`}
+                className={`text-[9px] mt-1 font-bold uppercase tracking-tighter opacity-60 flex items-center gap-1 ${isRunning ? "text-black/60" : "text-mono-secondary"}`}
               >
                 <Activity className="w-2.5 h-2.5" />
                 {task.statusDetail}
@@ -163,6 +166,8 @@ const App: React.FC = () => {
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [bindUrlInput, setBindUrlInput] = useState("");
+  const [bindError, setBindError] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<{
     id: number;
     url: string;
@@ -183,7 +188,7 @@ const App: React.FC = () => {
 
   const projectLocked = React.useMemo(
     () => isProjectLocked(activeProject),
-    [activeProject?.targetUrl],
+    [activeProject],
   );
 
   const lockedPlatform = React.useMemo<AIPlatform | null>(
@@ -193,6 +198,11 @@ const App: React.FC = () => {
 
   const effectivePlatform: AIPlatform = lockedPlatform ?? selectedPlatform;
 
+  const currentTabBindable = React.useMemo(() => {
+    if (!currentTab?.url) return false;
+    return validateChatUrl(currentTab.url).ok === true;
+  }, [currentTab?.url]);
+
   const otherRunningProjects = React.useMemo(
     () =>
       state?.projects?.filter(
@@ -200,6 +210,98 @@ const App: React.FC = () => {
       ) || [],
     [state?.projects, activeProject?.id],
   );
+
+  const handleAddPrompt = React.useCallback(async () => {
+    if (!prompt.trim()) return;
+
+    await sendMessageToBackground({
+      type: "ADD_TASK",
+      payload: {
+        prompt,
+        platform: effectivePlatform,
+      },
+    });
+
+    setPrompt("");
+  }, [prompt, effectivePlatform]);
+
+  const handleBindChat = React.useCallback(
+    async (rawUrl: string) => {
+      if (!activeProject) return;
+      setBindError(null);
+      const validation = validateChatUrl(rawUrl);
+      if (validation.ok === false) {
+        setBindError(validation.error);
+        return;
+      }
+      const res = await sendMessageToBackground({
+        type: "UPDATE_PROJECT_TARGET_URL",
+        payload: { id: activeProject.id, targetUrl: rawUrl.trim() },
+      });
+      if (res && res.success === false) {
+        setBindError(res.error || "Failed to bind chat");
+        return;
+      }
+      setBindUrlInput("");
+      setBindError(null);
+    },
+    [activeProject?.id],
+  );
+
+  const handleCreateProject = React.useCallback(async () => {
+    if (!newProjectName.trim()) return;
+    await sendMessageToBackground({
+      type: "CREATE_PROJECT",
+      payload: { name: newProjectName },
+    });
+    setNewProjectName("");
+    setIsCreatingProject(false);
+  }, [newProjectName]);
+
+  const handleSwitchProject = React.useCallback(async (id: string) => {
+    await sendMessageToBackground({ type: "SWITCH_PROJECT", payload: id });
+    setIsProjectMenuOpen(false);
+    setSelectedIndex(0);
+  }, []);
+
+  const handleDeleteProject = React.useCallback(
+    async (id: string) => {
+      if (state && state.projects.length <= 1) return;
+      await sendMessageToBackground({ type: "DELETE_PROJECT", payload: id });
+    },
+    [state],
+  );
+
+  const handleStart = React.useCallback(
+    () => sendMessageToBackground({ type: "START_QUEUE" }),
+    [],
+  );
+  const handlePause = React.useCallback(
+    () => sendMessageToBackground({ type: "PAUSE_QUEUE" }),
+    [],
+  );
+  const handleResume = React.useCallback(
+    () => sendMessageToBackground({ type: "RESUME_QUEUE" }),
+    [],
+  );
+  const handleClear = React.useCallback(
+    () => sendMessageToBackground({ type: "CLEAR_QUEUE" }),
+    [],
+  );
+  const handleRemove = React.useCallback(
+    (id: string) =>
+      sendMessageToBackground({ type: "REMOVE_TASK", payload: id }),
+    [],
+  );
+
+  const handleJumpToChat = React.useCallback(() => {
+    if (activeProject?.targetUrl) {
+      sendMessageToBackground({
+        type: "FOCUS_TAB",
+        payload: activeProject.targetUrl,
+      });
+    }
+  }, [activeProject?.targetUrl]);
 
   // Auto-focus prompt input on mount
   useEffect(() => {
@@ -315,6 +417,11 @@ const App: React.FC = () => {
     selectedIndex,
     isListActive,
     currentTab,
+    handleClear,
+    handleStart,
+    handleResume,
+    handlePause,
+    handleRemove,
   ]);
 
   // Sync platform when URL changes
@@ -325,75 +432,6 @@ const App: React.FC = () => {
       setSelectedPlatform(detected);
     }
   }, [activeProject?.targetUrl, currentTab]);
-
-  const handleAddPrompt = React.useCallback(async () => {
-    if (!prompt.trim()) return;
-
-    await sendMessageToBackground({
-      type: "ADD_TASK",
-      payload: {
-        prompt,
-        platform: effectivePlatform,
-      },
-    });
-
-    setPrompt("");
-  }, [prompt, effectivePlatform, activeProject?.id]);
-
-  const handleCreateProject = React.useCallback(async () => {
-    if (!newProjectName.trim()) return;
-    await sendMessageToBackground({
-      type: "CREATE_PROJECT",
-      payload: { name: newProjectName },
-    });
-    setNewProjectName("");
-    setIsCreatingProject(false);
-  }, [newProjectName]);
-
-  const handleSwitchProject = React.useCallback(async (id: string) => {
-    await sendMessageToBackground({ type: "SWITCH_PROJECT", payload: id });
-    setIsProjectMenuOpen(false);
-    setSelectedIndex(0);
-  }, []);
-
-  const handleDeleteProject = React.useCallback(
-    async (id: string) => {
-      if (state && state.projects.length <= 1) return;
-      await sendMessageToBackground({ type: "DELETE_PROJECT", payload: id });
-    },
-    [state?.projects.length],
-  );
-
-  const handleStart = React.useCallback(
-    () => sendMessageToBackground({ type: "START_QUEUE" }),
-    [],
-  );
-  const handlePause = React.useCallback(
-    () => sendMessageToBackground({ type: "PAUSE_QUEUE" }),
-    [],
-  );
-  const handleResume = React.useCallback(
-    () => sendMessageToBackground({ type: "RESUME_QUEUE" }),
-    [],
-  );
-  const handleClear = React.useCallback(
-    () => sendMessageToBackground({ type: "CLEAR_QUEUE" }),
-    [],
-  );
-  const handleRemove = React.useCallback(
-    (id: string) =>
-      sendMessageToBackground({ type: "REMOVE_TASK", payload: id }),
-    [],
-  );
-
-  const handleJumpToChat = React.useCallback(() => {
-    if (activeProject?.targetUrl) {
-      sendMessageToBackground({
-        type: "FOCUS_TAB",
-        payload: activeProject.targetUrl,
-      });
-    }
-  }, [activeProject?.targetUrl]);
 
   if (!state) return <div className="p-4 text-center">Loading...</div>;
 
@@ -644,6 +682,56 @@ const App: React.FC = () => {
               </span>
             )}
           </div>
+
+          {/* Bind to existing chat (only when unlocked) */}
+          {activeProject && !projectLocked && (
+            <div className="space-y-1.5 px-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] font-black uppercase tracking-tighter text-mono-secondary">
+                  Bind Existing Chat
+                </span>
+                {currentTabBindable && currentTab?.url && (
+                  <button
+                    onClick={() => handleBindChat(currentTab.url)}
+                    className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded-md bg-mono-sidebar border border-mono text-mono-secondary hover:border-white hover:text-white transition-colors"
+                    title="Bind this project to the chat in the current tab"
+                  >
+                    Use Current Tab
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={bindUrlInput}
+                  onChange={(e) => {
+                    setBindUrlInput(e.target.value);
+                    if (bindError) setBindError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleBindChat(bindUrlInput);
+                    }
+                  }}
+                  placeholder="Paste existing chat URL (chatgpt.com/c/..., claude.ai/chat/..., gemini.google.com/app/...)"
+                  className="flex-1 bg-mono-sidebar border border-mono rounded-md px-2 py-1 text-[10px] font-medium text-mono-primary placeholder:text-neutral-700 focus:outline-none focus:border-white"
+                />
+                <button
+                  onClick={() => handleBindChat(bindUrlInput)}
+                  disabled={!bindUrlInput.trim()}
+                  className="text-[9px] font-black uppercase tracking-tighter px-2 py-1 rounded-md bg-white text-black disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Bind
+                </button>
+              </div>
+              {bindError && (
+                <p className="text-[9px] font-bold text-red-500 px-0.5">
+                  {bindError}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Platform Selector */}
           <div className="flex gap-2">

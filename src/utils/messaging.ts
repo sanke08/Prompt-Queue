@@ -65,6 +65,30 @@ export function getPlatformFromUrl(url: string | undefined | null): AIPlatform |
   return null;
 }
 
+// A "valid chat URL" for binding: must be a supported platform AND a real conversation
+// (not a new-chat landing page like /new, /app, or /). Returns the parsed platform on
+// success, or an error string on failure.
+export function validateChatUrl(url: string): { ok: true; platform: AIPlatform } | { ok: false; error: string } {
+  if (!url || !url.trim()) return { ok: false, error: "URL is empty" };
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return { ok: false, error: "Not a valid URL" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { ok: false, error: "URL must be http(s)" };
+  }
+  const platform = getPlatformFromUrl(parsed.toString());
+  if (!platform) {
+    return { ok: false, error: "URL is not a supported AI platform (ChatGPT, Claude, Gemini)" };
+  }
+  if (isNewChatUrl(parsed.toString())) {
+    return { ok: false, error: "URL is a new-chat page, not an existing conversation" };
+  }
+  return { ok: true, platform };
+}
+
 export type MessageType = 
   | { type: 'ADD_TASK'; payload: { prompt: string; platform: AIPlatform } }
   | { type: 'REMOVE_TASK'; payload: string }
