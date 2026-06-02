@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from './adapter';
+import { pressEnter, setNativeValue } from './adapter';
 
 export const createChatGPTAdapter = (): PlatformAdapter => ({
   name: 'ChatGPT',
@@ -18,15 +19,23 @@ export const createChatGPTAdapter = (): PlatformAdapter => ({
   },
 
   setInputValue(el: HTMLElement, text: string) {
+    el.focus();
     if (el.tagName === 'TEXTAREA') {
-      (el as HTMLTextAreaElement).value = text;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      setNativeValue(el as HTMLTextAreaElement, text);
     } else {
-      el.focus();
-      el.innerText = '';
-      el.appendChild(document.createTextNode(text));
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+      // contenteditable (ProseMirror). Use execCommand so ProseMirror's own
+      // input pipeline fires the native beforeinput/input events it tracks.
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.execCommand('insertText', false, text);
+      // Fallback for builds where execCommand is disabled.
+      if (!el.innerText.trim()) {
+        el.innerHTML = `<p>${text}</p>`;
+      }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
     }
   },
 
@@ -43,9 +52,8 @@ export const createChatGPTAdapter = (): PlatformAdapter => ({
     // Fallback: Enter key
     const input = this.findInput();
     if (input) {
-      input.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
-      }));
+      input.focus();
+      pressEnter(input);
       return true;
     }
     return false;

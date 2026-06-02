@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from './adapter';
+import { pressEnter, setNativeValue } from './adapter';
 
 export const createClaudeAdapter = (): PlatformAdapter => ({
   name: 'Claude',
@@ -22,19 +23,22 @@ export const createClaudeAdapter = (): PlatformAdapter => ({
   setInputValue(el: HTMLElement, text: string) {
     el.focus();
     if (el.tagName === 'TEXTAREA') {
-      (el as HTMLTextAreaElement).value = text;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      setNativeValue(el as HTMLTextAreaElement, text);
     } else {
-      // ProseMirror contenteditable
-      // Clear and insert using execCommand for ProseMirror compatibility
+      // ProseMirror contenteditable. Select existing content via a Range
+      // (more reliable on macOS than execCommand('selectAll')) then insert.
       const selection = window.getSelection();
-      if (selection) {
-        el.focus();
-        // Select all existing content
-        document.execCommand('selectAll', false);
-        // Replace with new text
-        document.execCommand('insertText', false, text);
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.execCommand('insertText', false, text);
+      // Fallback for builds where execCommand is a no-op: write paragraphs
+      // and fire the beforeinput/input events ProseMirror tracks.
+      if (!el.innerText.trim()) {
+        el.innerHTML = `<p>${text}</p>`;
       }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
     }
   },
 
@@ -53,9 +57,8 @@ export const createClaudeAdapter = (): PlatformAdapter => ({
     // Fallback: Enter key
     const input = this.findInput();
     if (input) {
-      input.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
-      }));
+      input.focus();
+      pressEnter(input);
       return true;
     }
     return false;

@@ -23,6 +23,9 @@ export class Worker {
     if (this.processingPlatforms.has(platform)) return;
     this.processingPlatforms.add(platform);
 
+    // Guarantee state is loaded before we start reading the queue.
+    await this.queueManager.ready();
+
     console.log(`[Worker] Started queue for ${platform}`);
 
     try {

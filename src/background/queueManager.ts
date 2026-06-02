@@ -8,13 +8,31 @@ export class QueueManager {
     activeProjectId: '',
   };
 
-  async init() {
+  // In MV3 the service worker is killed when idle and restarted on the next
+  // event. init() reloads state from storage, but message handlers can fire
+  // before it finishes. We cache the in-flight promise so every handler can
+  // `await ready()` and be guaranteed to operate on real, loaded state.
+  private initPromise: Promise<void> | null = null;
+
+  init(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = this.load();
+    }
+    return this.initPromise;
+  }
+
+  /** Await this at the top of every handler that touches state. */
+  ready(): Promise<void> {
+    return this.init();
+  }
+
+  private async load() {
     const stored = await getStoredState();
     // Migrating old state if necessary (simple check)
     if (stored && !Array.isArray(stored.tasks)) {
        this.state = {
          ...stored,
-         tasks: (stored as any).projects?.flatMap((p: any) => 
+         tasks: (stored as any).projects?.flatMap((p: any) =>
            (p.tasks || []).map((t: any) => ({ ...t, projectId: p.id }))
          ) || [],
          projects: (stored as any).projects?.map((p: any) => {
@@ -176,22 +194,23 @@ export class QueueManager {
     await this.persist();
   }
 
-  private persistTimeout: any = null;
-
-  private async persist(immediate = false) {
-    const save = async () => {
-      await saveState(this.state);
-      chrome.runtime.sendMessage({ type: 'QUEUE_STATE_UPDATED', payload: this.state }, () => {
-        if (chrome.runtime.lastError) {}
-      });
-    };
-
-    if (immediate) {
-      if (this.persistTimeout) clearTimeout(this.persistTimeout);
-      await save();
-    } else {
-      if (this.persistTimeout) clearTimeout(this.persistTimeout);
-      this.persistTimeout = setTimeout(save, 300);
+  // Persist synchronously. A debounced setTimeout is unsafe in an MV3 service
+  // worker: the worker can be terminated before the timer fires, silently
+  // dropping the write and the UI broadcast (a major source of "lag" and
+  // stale UI). We always await the storage write so the worker stays alive
+  // until the data is durable, then broadcast immediately.
+  private async persist() {
+    await saveState(this.state);
+    try {
+      chrome.runtime.sendMessage(
+        { type: 'QUEUE_STATE_UPDATED', payload: this.state },
+        () => {
+          // Swallow "no receiver" errors when the popup/side panel is closed.
+          if (chrome.runtime.lastError) {}
+        },
+      );
+    } catch {
+      // sendMessage can throw if no listeners exist; ignore.
     }
   }
 }

@@ -311,6 +311,11 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
   }, []);
 
+  // Mount-only effect: fetch initial state, get current tab, and register the
+  // background state listener EXACTLY ONCE. Previously this effect depended on
+  // [state, activeTasks, ...] and tore down / re-added the chrome.runtime and
+  // keydown listeners on every single state update, which thrashed listeners
+  // and caused visible UI lag during rapid task updates.
   useEffect(() => {
     // Initial fetch
     sendMessageToBackground({ type: "GET_QUEUE_STATE" }).then(setState);
@@ -329,14 +334,59 @@ const App: React.FC = () => {
       }
     });
 
+    // Open a long-lived port so the background knows the panel is open. When
+    // this panel closes, the port disconnects automatically and the page "a"
+    // hotkey stops firing. More reliable than a message + unmount cleanup.
+    const panelPort = chrome.runtime.connect({ name: "panel" });
+
     // Listen for updates from background
     const listener = (message: any) => {
       if (message.type === "QUEUE_STATE_UPDATED") {
         setState(message.payload);
       }
+      // Selected text captured from the page via the "a" hotkey: replace the
+      // prompt box and focus it so the user can edit and press Enter.
+      if (message.type === "FILL_PROMPT") {
+        const text = message.payload?.text ?? "";
+        setPrompt(text);
+        requestAnimationFrame(() => {
+          const ta = textareaRef.current;
+          if (ta) {
+            ta.focus();
+            // Auto-grow and move caret to the end.
+            ta.style.height = "auto";
+            ta.style.height = `${ta.scrollHeight}px`;
+            ta.setSelectionRange(text.length, text.length);
+          }
+        });
+      }
     };
     chrome.runtime.onMessage.addListener(listener);
 
+    // Poll once when the popup regains focus, in case a broadcast was missed
+    // while the side panel was hidden or the service worker was asleep.
+    const onFocus = () => {
+      sendMessageToBackground({ type: "GET_QUEUE_STATE" }).then(setState);
+    };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      chrome.runtime.onMessage.removeListener(listener);
+      window.removeEventListener("focus", onFocus);
+      try {
+        panelPort.disconnect();
+      } catch {
+        // already disconnected
+      }
+    };
+  }, []);
+
+  // Keep the latest keyboard handler in a ref so the keydown listener can be
+  // registered once but always call the freshest closure (fresh state/handlers)
+  // without re-registering on every render.
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
+
+  useEffect(() => {
     // Global keyboard shortcuts
     const handleKeyDown = (e: KeyboardEvent) => {
       const isInputFocused =
@@ -404,25 +454,29 @@ const App: React.FC = () => {
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      chrome.runtime.onMessage.removeListener(listener);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
+    // Store the freshest handler in the ref instead of registering a new
+    // window listener every time deps change.
+    keyHandlerRef.current = handleKeyDown;
   }, [
-    state,
     activeProject,
     activeTasks,
     showShortcuts,
     selectedIndex,
     isListActive,
-    currentTab,
     handleClear,
     handleStart,
     handleResume,
     handlePause,
     handleRemove,
   ]);
+
+  // Register the keydown listener exactly once; it always invokes the latest
+  // handler via the ref.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // Sync platform when URL changes
   useEffect(() => {
@@ -599,6 +653,7 @@ const App: React.FC = () => {
               { keys: ["Alt", "L"], desc: "Toggle Lock to Current Tab" },
               { keys: ["Enter"], desc: "Add prompt (from input)" },
               { keys: ["Shift", "Enter"], desc: "New line in input" },
+              { keys: ["A"], desc: "Send page selection to prompt (on website)" },
             ].map((shortcut, i) => (
               <div
                 key={i}

@@ -9,6 +9,22 @@ import {
 const queueManager = new QueueManager();
 const worker = new Worker(queueManager);
 
+// Tracks whether the side panel is currently open, so the page-level "a"
+// hotkey in the content script only acts when the panel is visible.
+// The panel opens a long-lived Port named "panel"; when the panel closes
+// (or its document is destroyed) the port disconnects, which is the most
+// reliable open/close signal available in MV3.
+let panelPorts = 0;
+const panelOpen = () => panelPorts > 0;
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "panel") return;
+  panelPorts++;
+  port.onDisconnect.addListener(() => {
+    panelPorts = Math.max(0, panelPorts - 1);
+  });
+});
+
 chrome.runtime.onInstalled.addListener(async () => {
   await queueManager.init();
   // Enable side panel on click
@@ -17,7 +33,9 @@ chrome.runtime.onInstalled.addListener(async () => {
     .catch((error: any) => console.error(error));
 });
 
-// Initialize on startup
+// Kick off initialization on startup. init() is idempotent and cached, so
+// this just warms the state; handlers below still `await queueManager.ready()`
+// to guarantee state is loaded even if the worker was just revived.
 queueManager.init();
 
 chrome.runtime.onMessage.addListener(
@@ -37,6 +55,10 @@ chrome.runtime.onMessage.addListener(
 );
 
 async function handleMessage(message: MessageType) {
+  // CRITICAL: ensure state is loaded from storage before any handler runs.
+  // The MV3 service worker may have just been revived with empty in-memory
+  // state, which is why switching projects / updating tasks "did nothing".
+  await queueManager.ready();
   switch (message.type) {
     case "ADD_TASK":
       return await queueManager.addTask(message.payload);
@@ -114,6 +136,27 @@ async function handleMessage(message: MessageType) {
         chrome.windows.update(tabs[0].windowId, { focused: true });
       }
       return { success: true };
+    }
+    case "IS_PANEL_OPEN":
+      return { open: panelOpen() };
+    case "CAPTURE_SELECTION": {
+      // Only relay to the panel if it's actually open.
+      if (!panelOpen()) return { success: false, open: false };
+      const text = (message.payload.text || "").trim();
+      if (!text) return { success: false, error: "empty" };
+      // Broadcast to the side panel. runtime.sendMessage reaches the panel
+      // document (which is an extension page), not the content script.
+      try {
+        chrome.runtime.sendMessage(
+          { type: "FILL_PROMPT", payload: { text } },
+          () => {
+            if (chrome.runtime.lastError) {}
+          },
+        );
+      } catch {
+        // No receiver; ignore.
+      }
+      return { success: true, open: true };
     }
     default:
       return null;

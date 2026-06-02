@@ -37,6 +37,45 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender: chrome.runt
   }
 });
 
+// --- "a" hotkey: send the current page selection to the side panel's prompt box ---
+// Only fires when the side panel is open (the background tracks this) and the
+// user is NOT typing into an editable element on the page.
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return (
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    el.isContentEditable === true
+  );
+}
+
+document.addEventListener(
+  'keydown',
+  (e: KeyboardEvent) => {
+    // Only the bare "a" key — ignore Cmd/Ctrl+A (select all), Alt/Shift combos.
+    if (e.key !== 'a' || e.metaKey || e.ctrlKey || e.altKey) return;
+    // Don't hijack typing in page inputs / chat boxes.
+    if (isEditableTarget(e.target) || isEditableTarget(document.activeElement)) return;
+
+    const selection = window.getSelection();
+    const text = selection?.toString().trim() ?? '';
+    if (!text) return;
+
+    // Ask the background to relay this to the panel. If the panel is closed,
+    // the background returns { open: false } and nothing happens. We only get
+    // here when the target is non-editable, so there's no typing to suppress.
+    chrome.runtime.sendMessage(
+      { type: 'CAPTURE_SELECTION', payload: { text } },
+      () => {
+        if (chrome.runtime.lastError) return;
+      },
+    );
+  },
+  true, // capture phase, so we see it before the page's own handlers
+);
+
 async function handleExecutePrompt(prompt: string) {
   if (!adapter) {
     return { success: false, error: 'No adapter found for this platform' };

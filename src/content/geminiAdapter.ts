@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from './adapter';
+import { pressEnter, setNativeValue } from './adapter';
 
 export const createGeminiAdapter = (): PlatformAdapter => ({
   name: 'Gemini',
@@ -24,13 +25,20 @@ export const createGeminiAdapter = (): PlatformAdapter => ({
   setInputValue(el: HTMLElement, text: string) {
     el.focus();
     if (el.tagName === 'TEXTAREA') {
-      (el as HTMLTextAreaElement).value = text;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      setNativeValue(el as HTMLTextAreaElement, text);
     } else {
-      // Contenteditable (Quill editor)
-      el.innerHTML = `<p>${text}</p>`;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+      // Contenteditable (Quill editor). Insert via execCommand so Quill's
+      // own input handler updates its internal model; fall back to innerHTML.
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.execCommand('insertText', false, text);
+      if (!el.innerText.trim()) {
+        el.innerHTML = `<p>${text}</p>`;
+      }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
     }
   },
 
@@ -50,9 +58,8 @@ export const createGeminiAdapter = (): PlatformAdapter => ({
     // Fallback: Enter key
     const input = this.findInput();
     if (input) {
-      input.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
-      }));
+      input.focus();
+      pressEnter(input);
       return true;
     }
     return false;

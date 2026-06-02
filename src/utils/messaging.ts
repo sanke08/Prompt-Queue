@@ -107,7 +107,13 @@ export type MessageType =
   | { type: 'UPDATE_PROJECT_NAME'; payload: { id: string; name: string } }
   | { type: 'CLEAR_PROJECT_LOCK'; payload: string }
   | { type: 'UPDATE_PROJECT_TARGET_URL'; payload: { id: string; targetUrl: string } }
-  | { type: 'FOCUS_TAB'; payload: string };
+  | { type: 'FOCUS_TAB'; payload: string }
+  // Content script asks the background whether the panel is open.
+  | { type: 'IS_PANEL_OPEN' }
+  // Content script captured selected text via the hotkey; relay it to the panel.
+  | { type: 'CAPTURE_SELECTION'; payload: { text: string } }
+  // Background -> side panel: fill the prompt box with this text.
+  | { type: 'FILL_PROMPT'; payload: { text: string } };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);
