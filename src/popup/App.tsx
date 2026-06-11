@@ -173,6 +173,7 @@ const App: React.FC = () => {
     url: string;
   } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const queueListRef = useRef<HTMLDivElement>(null);
 
   const activeProject = React.useMemo(
     () =>
@@ -224,6 +225,17 @@ const App: React.FC = () => {
 
     setPrompt("");
   }, [prompt, effectivePlatform]);
+
+  // Smooth-scroll the queue list to the bottom so a newly added task is visible.
+  const scrollQueueToBottom = React.useCallback(() => {
+    // Wait two frames so the new task has rendered before scrolling.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const list = queueListRef.current;
+        if (list) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+      }),
+    );
+  }, []);
 
   const handleBindChat = React.useCallback(
     async (rawUrl: string) => {
@@ -344,21 +356,11 @@ const App: React.FC = () => {
       if (message.type === "QUEUE_STATE_UPDATED") {
         setState(message.payload);
       }
-      // Selected text captured from the page via the "a" hotkey: replace the
-      // prompt box and focus it so the user can edit and press Enter.
-      if (message.type === "FILL_PROMPT") {
-        const text = message.payload?.text ?? "";
-        setPrompt(text);
-        requestAnimationFrame(() => {
-          const ta = textareaRef.current;
-          if (ta) {
-            ta.focus();
-            // Auto-grow and move caret to the end.
-            ta.style.height = "auto";
-            ta.style.height = `${ta.scrollHeight}px`;
-            ta.setSelectionRange(text.length, text.length);
-          }
-        });
+      // A page selection was added to the queue by the background via the "a"
+      // hotkey. The task itself arrives through QUEUE_STATE_UPDATED above; here
+      // we just scroll the list so the new task is visible.
+      if (message.type === "SELECTION_ADDED") {
+        scrollQueueToBottom();
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -478,14 +480,26 @@ const App: React.FC = () => {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Sync platform when URL changes
+  // Keep the panel's platform selector in sync with the active project.
+  // Priority: locked chat's platform > the project's saved choice > detected
+  // from the current tab. This runs when switching projects or when a project
+  // locks to a chat, so the selector reflects where tasks will actually run.
   useEffect(() => {
-    const targetUrl = activeProject?.targetUrl || currentTab?.url || "";
-    const detected = getPlatformFromUrl(targetUrl);
-    if (detected) {
-      setSelectedPlatform(detected);
-    }
-  }, [activeProject?.targetUrl, currentTab]);
+    const lockedUrl = activeProject?.targetUrl;
+    const locked = isProjectLocked(activeProject)
+      ? getPlatformFromUrl(lockedUrl)
+      : null;
+    const next =
+      locked ??
+      activeProject?.selectedPlatform ??
+      getPlatformFromUrl(currentTab?.url || "");
+    if (next) setSelectedPlatform(next);
+  }, [
+    activeProject?.id,
+    activeProject?.targetUrl,
+    activeProject?.selectedPlatform,
+    currentTab,
+  ]);
 
   if (!state) return <div className="p-4 text-center">Loading...</div>;
 
@@ -653,7 +667,7 @@ const App: React.FC = () => {
               { keys: ["Alt", "L"], desc: "Toggle Lock to Current Tab" },
               { keys: ["Enter"], desc: "Add prompt (from input)" },
               { keys: ["Shift", "Enter"], desc: "New line in input" },
-              { keys: ["A"], desc: "Send page selection to prompt (on website)" },
+              { keys: ["A"], desc: "Add page selection to queue (on website)" },
             ].map((shortcut, i) => (
               <div
                 key={i}
@@ -800,7 +814,16 @@ const App: React.FC = () => {
                   key={p}
                   disabled={isLocked}
                   onClick={() => {
-                    if (!isLocked) setSelectedPlatform(p);
+                    if (isLocked) return;
+                    setSelectedPlatform(p);
+                    // Persist the choice so the "a" hotkey (handled in the
+                    // background) queues captured selections for this platform.
+                    if (activeProject) {
+                      sendMessageToBackground({
+                        type: "SET_PROJECT_PLATFORM",
+                        payload: { id: activeProject.id, platform: p },
+                      });
+                    }
                   }}
                   title={
                     isLocked
@@ -869,7 +892,10 @@ const App: React.FC = () => {
         </div>
 
         {/* Scrollable Queue List */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-3 custom-scroll">
+        <div
+          ref={queueListRef}
+          className="flex-1 overflow-y-auto p-5 space-y-3 custom-scroll"
+        >
           <div className="flex justify-between items-center text-[10px] text-mono-secondary font-black uppercase tracking-[0.2em] px-1 mb-2">
             <span>
               {activeProject?.name || "Queue"} ({activeTasks.length || 0})

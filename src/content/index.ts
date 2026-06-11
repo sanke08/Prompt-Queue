@@ -59,6 +59,9 @@ document.addEventListener(
     // Don't hijack typing in page inputs / chat boxes.
     if (isEditableTarget(e.target) || isEditableTarget(document.activeElement)) return;
 
+    // Only meaningful on a recognized chat page (we need a platform to queue).
+    if (!platform) return;
+
     const selection = window.getSelection();
     const text = selection?.toString().trim() ?? '';
     if (!text) return;
@@ -67,7 +70,7 @@ document.addEventListener(
     // the background returns { open: false } and nothing happens. We only get
     // here when the target is non-editable, so there's no typing to suppress.
     chrome.runtime.sendMessage(
-      { type: 'CAPTURE_SELECTION', payload: { text } },
+      { type: 'CAPTURE_SELECTION', payload: { text, platform } },
       () => {
         if (chrome.runtime.lastError) return;
       },

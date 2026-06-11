@@ -49,7 +49,7 @@ export class QueueManager {
     return this.state;
   }
 
-  private get activeProject(): Project | undefined {
+  get activeProject(): Project | undefined {
     return this.state.projects.find(p => p.id === this.state.activeProjectId) || this.state.projects[0];
   }
 
@@ -191,6 +191,11 @@ export class QueueManager {
 
   async updateProjectTargetUrl(projectId: string, targetUrl: string) {
     this.updateProject(projectId, { targetUrl });
+    await this.persist();
+  }
+
+  async setProjectPlatform(projectId: string, platform: AIPlatform) {
+    this.updateProject(projectId, { selectedPlatform: platform });
     await this.persist();
   }
 

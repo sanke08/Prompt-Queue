@@ -22,6 +22,10 @@ export interface Project {
   currentTaskId: string | null;
   createdAt: number;
   targetUrl?: string;
+  // The platform the user picked in the panel for this project. Used by the
+  // "a" hotkey so a captured selection queues for the chosen platform rather
+  // than whichever page the selection happened to be made on.
+  selectedPlatform?: AIPlatform;
 }
 
 export interface QueueState {
@@ -107,13 +111,15 @@ export type MessageType =
   | { type: 'UPDATE_PROJECT_NAME'; payload: { id: string; name: string } }
   | { type: 'CLEAR_PROJECT_LOCK'; payload: string }
   | { type: 'UPDATE_PROJECT_TARGET_URL'; payload: { id: string; targetUrl: string } }
+  | { type: 'SET_PROJECT_PLATFORM'; payload: { id: string; platform: AIPlatform } }
   | { type: 'FOCUS_TAB'; payload: string }
   // Content script asks the background whether the panel is open.
   | { type: 'IS_PANEL_OPEN' }
-  // Content script captured selected text via the hotkey; relay it to the panel.
-  | { type: 'CAPTURE_SELECTION'; payload: { text: string } }
-  // Background -> side panel: fill the prompt box with this text.
-  | { type: 'FILL_PROMPT'; payload: { text: string } };
+  // Content script captured selected text via the hotkey; background adds it
+  // to the active project's queue.
+  | { type: 'CAPTURE_SELECTION'; payload: { text: string; platform: AIPlatform } }
+  // Background -> side panel: a selection was just added; scroll to it.
+  | { type: 'SELECTION_ADDED' };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);
