@@ -26,6 +26,9 @@ export interface Project {
   // "a" hotkey so a captured selection queues for the chosen platform rather
   // than whichever page the selection happened to be made on.
   selectedPlatform?: AIPlatform;
+  // Notion page URL — when set, after each task the worker finds the prompt
+  // text in the Notion page and pastes any generated image above it.
+  notionPageUrl?: string;
 }
 
 export interface QueueState {
@@ -112,6 +115,7 @@ export type MessageType =
   | { type: 'CLEAR_PROJECT_LOCK'; payload: string }
   | { type: 'UPDATE_PROJECT_TARGET_URL'; payload: { id: string; targetUrl: string } }
   | { type: 'SET_PROJECT_PLATFORM'; payload: { id: string; platform: AIPlatform } }
+  | { type: 'SET_PROJECT_NOTION_URL'; payload: { id: string; notionPageUrl: string } }
   | { type: 'FOCUS_TAB'; payload: string }
   // Content script asks the background whether the panel is open.
   | { type: 'IS_PANEL_OPEN' }
@@ -119,7 +123,13 @@ export type MessageType =
   // to the active project's queue.
   | { type: 'CAPTURE_SELECTION'; payload: { text: string; platform: AIPlatform } }
   // Background -> side panel: a selection was just added; scroll to it.
-  | { type: 'SELECTION_ADDED' };
+  | { type: 'SELECTION_ADDED' }
+  // Background -> AI tab: capture the most recently generated image.
+  | { type: 'CAPTURE_IMAGE' }
+  // Background -> notion tab: find prompt text and insert image above it.
+  | { type: 'NOTION_PASTE_IMAGE'; payload: { prompt: string; imageDataUrl?: string; imageSrc?: string } }
+  // Notion tab -> background: result of the paste attempt.
+  | { type: 'NOTION_PASTE_RESULT'; payload: { success: boolean; error?: string } };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);

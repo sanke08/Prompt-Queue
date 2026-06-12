@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ExternalLink,
   Activity,
+  BookOpen,
 } from "lucide-react";
 import type { QueueState, Task, AIPlatform } from "../utils/messaging";
 import {
@@ -168,6 +169,9 @@ const App: React.FC = () => {
   const [newProjectName, setNewProjectName] = useState("");
   const [bindUrlInput, setBindUrlInput] = useState("");
   const [bindError, setBindError] = useState<string | null>(null);
+  const [showNotionInput, setShowNotionInput] = useState(false);
+  const [notionUrlInput, setNotionUrlInput] = useState("");
+  const [notionError, setNotionError] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<{
     id: number;
     url: string;
@@ -314,6 +318,30 @@ const App: React.FC = () => {
       });
     }
   }, [activeProject?.targetUrl]);
+
+  const handleSetNotionUrl = React.useCallback(async () => {
+    if (!activeProject) return;
+    setNotionError(null);
+    const url = notionUrlInput.trim();
+    if (url && !url.includes('notion.so') && !url.includes('notion.com')) {
+      setNotionError('Must be a notion.so or notion.com URL');
+      return;
+    }
+    await sendMessageToBackground({
+      type: 'SET_PROJECT_NOTION_URL',
+      payload: { id: activeProject.id, notionPageUrl: url },
+    });
+    setNotionUrlInput('');
+    setShowNotionInput(false);
+  }, [activeProject?.id, notionUrlInput]);
+
+  const handleClearNotionUrl = React.useCallback(async () => {
+    if (!activeProject) return;
+    await sendMessageToBackground({
+      type: 'SET_PROJECT_NOTION_URL',
+      payload: { id: activeProject.id, notionPageUrl: '' },
+    });
+  }, [activeProject?.id]);
 
   // Auto-focus prompt input on mount
   useEffect(() => {
@@ -494,6 +522,10 @@ const App: React.FC = () => {
       activeProject?.selectedPlatform ??
       getPlatformFromUrl(currentTab?.url || "");
     if (next) setSelectedPlatform(next);
+    // Reset the Notion input panel when switching projects
+    setShowNotionInput(false);
+    setNotionUrlInput('');
+    setNotionError(null);
   }, [
     activeProject?.id,
     activeProject?.targetUrl,
@@ -801,6 +833,83 @@ const App: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* Notion Integration */}
+          <div className="space-y-1.5 px-1">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <BookOpen className="w-3 h-3 text-mono-secondary" />
+                <span className="text-[9px] font-black uppercase tracking-tighter text-mono-secondary">
+                  Notion Page
+                </span>
+              </div>
+              {activeProject?.notionPageUrl ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[8px] font-bold text-emerald-400 truncate max-w-[120px]" title={activeProject.notionPageUrl}>
+                    Linked
+                  </span>
+                  <button
+                    onClick={handleClearNotionUrl}
+                    className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded text-red-400 hover:text-red-300 transition-colors"
+                    title="Remove Notion link"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowNotionInput((v) => !v)}
+                  className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded-md bg-mono-sidebar border border-mono text-mono-secondary hover:border-white hover:text-white transition-colors"
+                >
+                  {showNotionInput ? 'Cancel' : 'Link Page'}
+                </button>
+              )}
+            </div>
+
+            {activeProject?.notionPageUrl && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-mono-sidebar border border-mono rounded-lg">
+                <BookOpen className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                <span className="flex-1 text-[8px] font-bold text-mono-primary tracking-tight truncate" title={activeProject.notionPageUrl}>
+                  {activeProject.notionPageUrl}
+                </span>
+              </div>
+            )}
+
+            {showNotionInput && !activeProject?.notionPageUrl && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={notionUrlInput}
+                    onChange={(e) => {
+                      setNotionUrlInput(e.target.value);
+                      if (notionError) setNotionError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); handleSetNotionUrl(); }
+                      if (e.key === 'Escape') { setShowNotionInput(false); setNotionUrlInput(''); }
+                    }}
+                    placeholder="https://www.notion.so/your-page..."
+                    className="flex-1 bg-mono-sidebar border border-mono rounded-md px-2 py-1 text-[10px] font-medium text-mono-primary placeholder:text-neutral-700 focus:outline-none focus:border-white"
+                  />
+                  <button
+                    onClick={handleSetNotionUrl}
+                    disabled={!notionUrlInput.trim()}
+                    className="text-[9px] font-black uppercase tracking-tighter px-2 py-1 rounded-md bg-white text-black disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Link
+                  </button>
+                </div>
+                {notionError && (
+                  <p className="text-[9px] font-bold text-red-500 px-0.5">{notionError}</p>
+                )}
+                <p className="text-[8px] text-mono-secondary px-0.5 leading-relaxed">
+                  After each image task, the extension will open this page and paste the image above the matching prompt text.
+                </p>
+              </div>
+            )}
+          </div>
 
           {/* Platform Selector */}
           <div className="flex gap-2">

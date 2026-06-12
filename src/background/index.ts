@@ -138,6 +138,13 @@ async function handleMessage(message: MessageType) {
       );
       return { success: true };
     }
+    case "SET_PROJECT_NOTION_URL": {
+      await queueManager.setProjectNotionUrl(
+        message.payload.id,
+        message.payload.notionPageUrl,
+      );
+      return { success: true };
+    }
     case "FOCUS_TAB": {
       const tabs = await chrome.tabs.query({ url: message.payload });
       if (tabs.length > 0) {

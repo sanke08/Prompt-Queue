@@ -11,10 +11,11 @@ export default defineConfig({
         popup: resolve(__dirname, 'index.html'),
         background: resolve(__dirname, 'src/background/index.ts'),
         content: resolve(__dirname, 'src/content/index.ts'),
+        notion: resolve(__dirname, 'src/notion/index.ts'),
       },
       output: {
         entryFileNames: (chunk) => {
-          if (chunk.name === 'background' || chunk.name === 'content') {
+          if (chunk.name === 'background' || chunk.name === 'content' || chunk.name === 'notion') {
             return '[name].js'
           }
           return 'assets/[name]-[hash].js'

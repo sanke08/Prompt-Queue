@@ -35,6 +35,13 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender: chrome.runt
     sendResponse({ success: true, platform });
     return true;
   }
+
+  if (message.type === 'CAPTURE_IMAGE') {
+    captureLatestImage()
+      .then(res => sendResponse(res))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 // --- "a" hotkey: send the current page selection to the side panel's prompt box ---
@@ -78,6 +85,53 @@ document.addEventListener(
   },
   true, // capture phase, so we see it before the page's own handlers
 );
+
+// Scan the page for the most recently generated image and return its src URL.
+// We intentionally return the URL only — the background worker fetches it,
+// avoiding the cross-origin SecurityError that canvas.toDataURL() throws for
+// images served from CDNs like files.oaiusercontent.com (ChatGPT/DALL-E).
+async function captureLatestImage(): Promise<{ success: boolean; imageDataUrl?: string; imageSrc?: string; error?: string }> {
+  try {
+    const imgs = Array.from(document.querySelectorAll<HTMLImageElement>('img'));
+
+    const candidates = imgs.filter((img) => {
+      if (!img.src || img.src.startsWith('data:image/svg')) return false;
+      if (img.naturalWidth < 100 || img.naturalHeight < 100) return false;
+      if (img.complete === false) return false;
+      if (img.naturalWidth <= 64 && img.naturalHeight <= 64) return false;
+      return true;
+    });
+
+    if (candidates.length === 0) {
+      return { success: false, error: 'No generated image found on page' };
+    }
+
+    const img = candidates[candidates.length - 1];
+
+    // Try same-origin canvas capture first (works for Gemini which serves
+    // images from the same domain). For cross-origin images this throws —
+    // in that case we return the src URL and let the background fetch it.
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
+        const dataUrl = canvas.toDataURL('image/png');
+        return { success: true, imageDataUrl: dataUrl };
+      }
+    } catch (canvasErr: any) {
+      if (canvasErr.name !== 'SecurityError') throw canvasErr;
+      // Cross-origin — fall through to URL-based capture
+    }
+
+    // Return the raw src so the background can fetch it with full permissions
+    return { success: true, imageSrc: img.src };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
 
 async function handleExecutePrompt(prompt: string) {
   if (!adapter) {

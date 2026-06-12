@@ -2,6 +2,14 @@ import { QueueManager } from "./queueManager";
 import { sendMessageToTab } from "../utils/messaging";
 import type { AIPlatform } from "../utils/messaging";
 
+// Sent from the AI content script back to background after capturing an image.
+interface ImageCaptureResult {
+  success: boolean;
+  imageDataUrl?: string; // data URL — same-origin canvas capture (e.g. Gemini)
+  imageSrc?: string;     // original CDN URL — cross-origin (e.g. ChatGPT/DALL-E)
+  error?: string;
+}
+
 export class Worker {
   private queueManager: QueueManager;
   private processingPlatforms = new Set<AIPlatform>();
@@ -170,6 +178,27 @@ export class Worker {
           }
         }
 
+        // If this project has a Notion page set, try to capture the generated
+        // image from the AI tab and paste it into Notion above the prompt text.
+        const freshProject = this.queueManager
+          .getState()
+          .projects.find((p) => p.id === project.id);
+        if (freshProject?.notionPageUrl) {
+          await this.queueManager.updateTask(task.id, {
+            statusDetail: "Capturing image for Notion...",
+          });
+          const notionResult = await this.pasteImageToNotion(
+            tabId,
+            task.prompt,
+            freshProject.notionPageUrl,
+          );
+          await this.queueManager.updateTask(task.id, {
+            statusDetail: notionResult.success
+              ? "Completed + Notion updated"
+              : `Completed (Notion: ${notionResult.error ?? 'paste failed'})`,
+          });
+        }
+
         // Check if this was the last task to send notification and stop project
         const nextTask = await this.queueManager.getNextPendingTask(project.id);
         if (!nextTask) {
@@ -200,6 +229,141 @@ export class Worker {
         statusDetail: "Critical error",
       });
     }
+  }
+
+  // Capture the most recently generated image from the AI tab (as a data URL),
+  // then open/focus the Notion page and instruct its content script to paste it.
+  private async pasteImageToNotion(
+    aiTabId: number,
+    prompt: string,
+    notionPageUrl: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Ask the AI content script to grab the latest generated image.
+      const capture: ImageCaptureResult = await sendMessageToTab(
+        aiTabId,
+        { type: 'CAPTURE_IMAGE' },
+        3,
+      ).catch(() => ({ success: false, error: 'capture failed' }));
+
+      if (!capture.success || (!capture.imageDataUrl && !capture.imageSrc)) {
+        const msg = capture.error ?? 'No image found on AI page';
+        console.warn('[Worker] No image captured from AI tab:', msg);
+        return { success: false, error: msg };
+      }
+
+      // The Notion content script runs on the notion.so origin and CANNOT fetch
+      // a cross-origin CDN URL (CORS). So we must always hand it a self-contained
+      // data: URL. If the AI tab gave us a raw src (cross-origin image like
+      // ChatGPT/DALL-E on files.oaiusercontent.com), fetch + encode it HERE, in
+      // the background service worker, where host_permissions bypass CORS.
+      let imageDataUrl = capture.imageDataUrl;
+      if (!imageDataUrl && capture.imageSrc) {
+        try {
+          const res = await fetch(capture.imageSrc);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          const arrayBuffer = await blob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+          // Chunk to avoid stack overflow on large images
+          let binary = '';
+          const CHUNK = 8192;
+          for (let i = 0; i < bytes.length; i += CHUNK) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+          }
+          const base64 = btoa(binary);
+          const mime = blob.type || 'image/png';
+          imageDataUrl = `data:${mime};base64,${base64}`;
+        } catch (fetchErr: any) {
+          return { success: false, error: `Could not fetch image: ${fetchErr.message}` };
+        }
+      }
+
+      // Hard guarantee: never proceed without a data URL the Notion script can
+      // use directly. (Covers the case where a same-origin capture returned only
+      // a src, or encoding silently produced nothing.)
+      if (!imageDataUrl) {
+        return { success: false, error: 'Could not produce a usable image (no data URL)' };
+      }
+
+      // Find or open the Notion tab.
+      const notionTab = await this.ensureNotionTab(notionPageUrl);
+      if (!notionTab?.id) {
+        return { success: false, error: 'Could not open Notion tab' };
+      }
+
+      // Wait for the Notion page to settle after navigation/focus.
+      await new Promise((r) => setTimeout(r, 2000));
+
+      // Inject the notion content script programmatically. This handles tabs
+      // that were already open before the extension was installed/reloaded —
+      // manifest content_scripts only auto-inject into tabs opened after load.
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: notionTab.id },
+          files: ['notion.js'],
+        });
+        // Small pause for the script to register its message listener
+        await new Promise((r) => setTimeout(r, 300));
+      } catch (injectErr: any) {
+        // A re-injection on an already-injected tab is harmless. But if the tab
+        // is gone / inaccessible, the message below will never be received — so
+        // surface those cases instead of hanging on a retry timeout.
+        const msg = String(injectErr?.message ?? injectErr);
+        if (msg.includes('No tab') || msg.includes('Cannot access') || msg.includes('closed')) {
+          return { success: false, error: `Notion tab unavailable: ${msg}` };
+        }
+        // Otherwise assume the manifest-declared content script is already live.
+      }
+
+      // Send ONLY the self-contained data URL — the Notion script must not
+      // attempt a cross-origin fetch (it would be CORS-blocked on notion.so).
+      const result = await sendMessageToTab(
+        notionTab.id,
+        {
+          type: 'NOTION_PASTE_IMAGE',
+          payload: {
+            prompt,
+            imageDataUrl,
+          },
+        },
+        3,
+      ).catch((e: Error) => ({ success: false, error: e.message }));
+
+      if (!result?.success) {
+        console.warn('[Worker] Notion paste failed:', result?.error);
+        return { success: false, error: result?.error ?? 'Paste failed' };
+      }
+
+      console.log('[Worker] Notion paste succeeded');
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Worker] pasteImageToNotion error:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  private async ensureNotionTab(notionPageUrl: string): Promise<chrome.tabs.Tab | null> {
+    const urlBase = notionPageUrl.split('?')[0].replace(/\/$/, '');
+    const allTabs = await chrome.tabs.query({});
+    const existing = allTabs.find((t) => {
+      if (!t.url) return false;
+      return t.url.split('?')[0].replace(/\/$/, '') === urlBase;
+    });
+
+    if (existing) {
+      await chrome.tabs.update(existing.id!, { active: true });
+      if (existing.windowId) {
+        await chrome.windows.update(existing.windowId, { focused: true });
+      }
+      return this.waitForTabComplete(existing.id!);
+    }
+
+    const tab = await chrome.tabs.create({ url: notionPageUrl, active: true });
+    if (tab.windowId) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    return this.waitForTabComplete(tab.id!);
   }
 
   private sendCompletionNotification(projectName: string) {

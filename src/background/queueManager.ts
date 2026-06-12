@@ -199,6 +199,11 @@ export class QueueManager {
     await this.persist();
   }
 
+  async setProjectNotionUrl(projectId: string, notionPageUrl: string) {
+    this.updateProject(projectId, { notionPageUrl: notionPageUrl || undefined });
+    await this.persist();
+  }
+
   // Persist synchronously. A debounced setTimeout is unsafe in an MV3 service
   // worker: the worker can be terminated before the timer fires, silently
   // dropping the write and the UI broadcast (a major source of "lag" and

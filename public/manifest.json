@@ -15,7 +15,9 @@
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://gemini.google.com/*",
-    "https://claude.ai/*"
+    "https://claude.ai/*",
+    "https://www.notion.so/*",
+    "https://app.notion.com/*"
   ],
   "action": {
     "default_title": "Open Prompt Queue Sidebar"
@@ -36,6 +38,13 @@
         "https://claude.ai/*"
       ],
       "js": ["content.js"]
+    },
+    {
+      "matches": [
+        "https://www.notion.so/*",
+        "https://app.notion.com/*"
+      ],
+      "js": ["notion.js"]
     }
   ]
 }
