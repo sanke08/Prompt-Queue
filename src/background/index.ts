@@ -19,11 +19,37 @@ const worker = new Worker(queueManager);
 let panelPorts = 0;
 const panelOpen = () => panelPorts > 0;
 
+async function broadcastPanelState(isOpen: boolean) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: "PANEL_STATE_CHANGED",
+          payload: { isOpen },
+        }).catch(() => {
+          // Ignore errors for tabs without listeners
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[Background] Failed to broadcast panel state:", err);
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "panel") return;
+  const wasOpen = panelOpen();
   panelPorts++;
+  if (!wasOpen && panelOpen()) {
+    broadcastPanelState(true);
+  }
   port.onDisconnect.addListener(() => {
+    const wasOpen = panelOpen();
     panelPorts = Math.max(0, panelPorts - 1);
+    if (wasOpen && !panelOpen()) {
+      broadcastPanelState(false);
+    }
   });
 });
 

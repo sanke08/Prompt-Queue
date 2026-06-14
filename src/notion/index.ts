@@ -15,7 +15,22 @@ if ((window as any).__notionQueueInjected) {
 }
 
 function registerListener() {
+  let isPanelOpen = false;
+
+  // Query initial state of the side panel
+  chrome.runtime.sendMessage({ type: 'IS_PANEL_OPEN' }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response && response.open !== undefined) {
+      isPanelOpen = response.open;
+    }
+  });
+
   chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
+    if (message.type === 'PANEL_STATE_CHANGED') {
+      isPanelOpen = message.payload.isOpen;
+      return false;
+    }
+
     if (message.type !== 'NOTION_PASTE_IMAGE') return false;
 
     const { prompt, imageDataUrl } = message.payload as {
@@ -30,6 +45,34 @@ function registerListener() {
 
     return true; // async response
   });
+
+  // Keydown listener to handle selection capture ("a" hotkey) on Notion
+  document.addEventListener(
+    'keydown',
+    (e: KeyboardEvent) => {
+      // Only the bare "a" key — ignore Cmd/Ctrl+A (select all), Alt/Shift combos.
+      if (e.key !== 'a' || e.metaKey || e.ctrlKey || e.altKey) return;
+      // Only capture and intercept if the side panel is open
+      if (!isPanelOpen) return;
+
+      const selection = window.getSelection();
+      const text = selection?.toString().trim() ?? '';
+      if (!text) return;
+
+      // Prevent Notion's default text-replacement behavior in the active block
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Send selection to background
+      chrome.runtime.sendMessage(
+        { type: 'CAPTURE_SELECTION', payload: { text, platform: 'chatgpt' } },
+        () => {
+          if (chrome.runtime.lastError) return;
+        }
+      );
+    },
+    true // capture phase to intercept before Notion's own editors handle it
+  );
 
   async function handlePasteImage(
     prompt: string,
