@@ -59,8 +59,13 @@ export class QueueManager {
     );
   }
 
-  async addTask(payload: { prompt: string; platform: AIPlatform }) {
-    const project = this.activeProject;
+  async addTask(payload: { prompt: string; platform: AIPlatform; projectId?: string }) {
+    // Add to an explicit project when given (so a long-running batch like the
+    // Notion scan can't misfile tasks into a project the user switched to
+    // mid-scan); otherwise default to the active project.
+    const project = payload.projectId
+      ? this.state.projects.find((p) => p.id === payload.projectId)
+      : this.activeProject;
     if (!project) throw new Error("No active project");
 
     const newTask: Task = {

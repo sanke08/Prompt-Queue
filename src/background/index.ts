@@ -1,9 +1,11 @@
 import { QueueManager } from "./queueManager";
 import { Worker } from "./worker";
+import { ensureNotionTab, injectNotionScript } from "./notionTab";
 import {
   isProjectLocked,
   validateChatUrl,
   getPlatformFromUrl,
+  sendMessageToTab,
   type MessageType,
   type AIPlatform,
 } from "../utils/messaging";
@@ -215,6 +217,91 @@ async function handleMessage(message: MessageType) {
         // No receiver; ignore.
       }
       return { success: true };
+    }
+    case "NOTION_SCAN_VISUALS": {
+      // Open the linked Notion page, read every [VISUAL PROMPT ...] block, and
+      // add each one to the active project's queue. Reuses the same tab-open /
+      // script-injection plumbing as the image-paste flow, and the same
+      // platform-resolution logic as CAPTURE_SELECTION.
+      const project = queueManager
+        .getState()
+        .projects.find((p) => p.id === message.payload.projectId);
+      if (!project) {
+        return { success: false, error: "Project not found." };
+      }
+      if (project.id !== queueManager.activeProject?.id) {
+        return { success: false, error: "Can only scan the active project." };
+      }
+      const notionPageUrl = project.notionPageUrl;
+      if (!notionPageUrl) {
+        return { success: false, error: "No Notion page linked." };
+      }
+
+      const tab = await ensureNotionTab(notionPageUrl);
+      if (!tab?.id) {
+        return { success: false, error: "Could not open Notion tab." };
+      }
+      // Let the page settle, then ensure the content script is injected.
+      await new Promise((r) => setTimeout(r, 2000));
+      const injectErr = await injectNotionScript(tab.id);
+      if (injectErr) {
+        return { success: false, error: injectErr };
+      }
+
+      const res: { success: boolean; visuals?: string[]; error?: string } =
+        await sendMessageToTab(tab.id, { type: "NOTION_EXTRACT_VISUALS" }, 3).catch(
+          (e: Error) => ({ success: false, error: e.message }),
+        );
+      if (!res?.success) {
+        return { success: false, error: res?.error ?? "Scan failed." };
+      }
+
+      const visuals = res.visuals ?? [];
+
+      // Resolve the platform exactly as CAPTURE_SELECTION does: a locked
+      // project's chat platform, else the panel-selected platform, else default.
+      const lockedPlatform = isProjectLocked(project)
+        ? getPlatformFromUrl(project.targetUrl)
+        : null;
+      const platform: AIPlatform =
+        lockedPlatform ?? project.selectedPlatform ?? "chatgpt";
+
+      // De-dupe against tasks already in this project so re-scanning doesn't
+      // double-add. Match on exact prompt text.
+      const existing = new Set(
+        queueManager
+          .getState()
+          .tasks.filter((t) => t.projectId === project.id)
+          .map((t) => t.prompt.trim()),
+      );
+
+      let added = 0;
+      let skipped = 0;
+      for (const visual of visuals) {
+        const prompt = visual.trim();
+        if (!prompt) continue;
+        if (existing.has(prompt)) {
+          skipped++;
+          continue;
+        }
+        await queueManager.addTask({ prompt, platform, projectId: project.id });
+        existing.add(prompt);
+        added++;
+      }
+
+      // Nudge an open panel to scroll to the newly added tasks.
+      if (added > 0) {
+        try {
+          chrome.runtime.sendMessage({ type: "SELECTION_ADDED" }, () => {
+            if (chrome.runtime.lastError) {
+            }
+          });
+        } catch {
+          // No receiver; ignore.
+        }
+      }
+
+      return { success: true, added, skipped, found: visuals.length };
     }
     default:
       return null;

@@ -31,6 +31,13 @@ function registerListener() {
       return false;
     }
 
+    if (message.type === 'NOTION_EXTRACT_VISUALS') {
+      extractVisuals()
+        .then((visuals) => sendResponse({ success: true, visuals }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true; // async response
+    }
+
     if (message.type !== 'NOTION_PASTE_IMAGE') return false;
 
     const { prompt, imageDataUrl } = message.payload as {
@@ -236,34 +243,40 @@ function registerListener() {
   // Block finding
   // -------------------------------------------------------------------------
 
+  // The block types that hold text. Shared by both block-finding (paste) and
+  // block-collecting (scan) so they read the SAME set of leaves.
+  const LEAF_SELECTORS = [
+    '[data-block-id].notion-text-block',
+    '[data-block-id].notion-header-block',
+    '[data-block-id].notion-sub_header-block',
+    '[data-block-id].notion-sub_sub_header-block',
+    '[data-block-id].notion-bulleted_list-block',
+    '[data-block-id].notion-numbered_list-block',
+    '[data-block-id].notion-to_do-block',
+    '[data-block-id].notion-toggle-block',
+    '[data-block-id].notion-quote-block',
+    '[data-block-id].notion-callout-block',
+  ].join(',');
+
+  // Read text ONLY from the block's own editable leaf, never nested children.
+  // Returns the trimmed text in its ORIGINAL case — callers lowercase if needed.
+  function getLeafText(block: HTMLElement): string {
+    const leaf =
+      block.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]') ||
+      block.querySelector<HTMLElement>('[contenteditable="true"]');
+    return (leaf?.innerText ?? block.innerText ?? '').trim();
+  }
+
   function findTextBlockByPrompt(prompt: string): HTMLElement | null {
     const trimmed = prompt.trim().toLowerCase();
-
-    const LEAF_SELECTORS = [
-      '[data-block-id].notion-text-block',
-      '[data-block-id].notion-header-block',
-      '[data-block-id].notion-sub_header-block',
-      '[data-block-id].notion-sub_sub_header-block',
-      '[data-block-id].notion-bulleted_list-block',
-      '[data-block-id].notion-numbered_list-block',
-      '[data-block-id].notion-to_do-block',
-      '[data-block-id].notion-toggle-block',
-      '[data-block-id].notion-quote-block',
-      '[data-block-id].notion-callout-block',
-    ].join(',');
 
     let blocks = Array.from(document.querySelectorAll<HTMLElement>(LEAF_SELECTORS));
     if (blocks.length === 0) {
       blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-block-id]'));
     }
 
-    // Read text ONLY from the leaf editable, not nested children
-    const getLeafText = (block: HTMLElement): string => {
-      const leaf =
-        block.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]') ||
-        block.querySelector<HTMLElement>('[contenteditable="true"]');
-      return (leaf?.innerText ?? block.innerText ?? '').trim().toLowerCase();
-    };
+    // Lowercased view of a block's leaf text (this function matches case-insensitively).
+    const getText = (block: HTMLElement): string => getLeafText(block).toLowerCase();
 
     // Every strategy iterates blocks in DOCUMENT ORDER and returns the FIRST
     // hit — so when a long prompt is split across several paragraph blocks, we
@@ -271,14 +284,14 @@ function registerListener() {
 
     // 1. Exact match — a block whose entire text IS the prompt.
     for (const block of blocks) {
-      if (getLeafText(block) === trimmed) return block;
+      if (getText(block) === trimmed) return block;
     }
 
     // 2. Block contains the prompt's head (prompt fits in one block, maybe with
     //    extra trailing text). First 100 chars keeps it specific.
     const head = trimmed.slice(0, 100);
     for (const block of blocks) {
-      if (getLeafText(block).includes(head)) return block;
+      if (getText(block).includes(head)) return block;
     }
 
     // 3. SPLIT-PROMPT case: the prompt was broken across multiple blocks. The
@@ -288,13 +301,13 @@ function registerListener() {
     //    (length >= 15 to avoid trivially-short blocks) whose text begins the
     //    prompt. Returns the topmost such block = above the whole group.
     for (const block of blocks) {
-      const text = getLeafText(block);
+      const text = getText(block);
       if (text.length >= 15 && trimmed.startsWith(text)) return block;
     }
 
     // 4. Reversed — a short standalone block whose text appears inside the prompt.
     for (const block of blocks) {
-      const text = getLeafText(block);
+      const text = getText(block);
       if (text.length > 10 && trimmed.includes(text)) return block;
     }
 
@@ -305,7 +318,7 @@ function registerListener() {
     let bestBlock: HTMLElement | null = null;
     let bestRatio = 0;
     for (const block of blocks) {
-      const text = getLeafText(block);
+      const text = getText(block);
       if (!text || text.length < 5) continue;
       let hits = 0;
       for (const t of text.split(/\s+/)) {
@@ -318,6 +331,136 @@ function registerListener() {
       }
     }
     return bestBlock;
+  }
+
+  // -------------------------------------------------------------------------
+  // Visual-prompt extraction (the "Scan Visuals" feature)
+  // -------------------------------------------------------------------------
+  //
+  // Reads EVERY block on the page and returns each "[VISUAL PROMPT ...]" entry
+  // as one string. Notion virtualizes long pages — only on-screen blocks exist
+  // in the DOM — so we scroll the page container top-to-bottom in steps, keying
+  // collected blocks by data-block-id to dedupe, until scrolling stops moving.
+  //
+  // A single visual prompt may be split across several paragraph blocks (the
+  // same reason findTextBlockByPrompt has its split-prompt strategy). So once we
+  // see a block whose text begins with "[visual prompt", we accumulate following
+  // blocks until the bracket closes, then join them into one prompt.
+
+  // Find the scrollable container that holds the page blocks. Notion uses
+  // .notion-scroller for the main content area; if none is found we fall back to
+  // the document scrolling element so a layout change in Notion can't silently
+  // reduce the scan to a single screenful.
+  function getScroller(): HTMLElement {
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>('.notion-scroller'),
+    );
+    // The real content scroller is the tallest one that actually scrolls.
+    let best: HTMLElement | null = null;
+    for (const el of candidates) {
+      if (el.scrollHeight > el.clientHeight + 50) {
+        if (!best || el.scrollHeight > best.scrollHeight) best = el;
+      }
+    }
+    return best ?? (document.scrollingElement as HTMLElement) ?? document.documentElement;
+  }
+
+  async function extractVisuals(): Promise<string[]> {
+    const ready = await waitFor(
+      () => document.querySelectorAll('[data-block-id]').length > 0,
+      15000,
+    );
+    if (!ready) {
+      throw new Error('Notion page not ready — no blocks found after 15s');
+    }
+    await sleep(600);
+
+    // Collect block text in document order, deduped by id. A Map preserves
+    // insertion order, and re-collecting an already-seen id is a no-op — so the
+    // final ordering reflects the first time each block scrolled into view,
+    // which for a top-to-bottom scroll is document order. We collect from the
+    // SAME leaf selectors the paste-side block finder uses (LEAF_SELECTORS), so
+    // both sides agree on what a text block is.
+    const collected = new Map<string, string>();
+    const collectVisible = () => {
+      let blocks = Array.from(document.querySelectorAll<HTMLElement>(LEAF_SELECTORS));
+      if (blocks.length === 0) {
+        blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-block-id]'));
+      }
+      for (const b of blocks) {
+        const id = b.getAttribute('data-block-id');
+        if (!id || collected.has(id)) continue;
+        collected.set(id, getLeafText(b));
+      }
+    };
+
+    const scroller = getScroller();
+    collectVisible();
+
+    const step = Math.max(scroller.clientHeight - 100, 300);
+    let pos = 0;
+    let lastScrollTop = -1;
+    // Guard against runaway loops on pathological pages.
+    for (let i = 0; i < 500; i++) {
+      scroller.scrollTo({ top: pos, behavior: 'auto' });
+      await sleep(250); // let virtualized blocks render
+      collectVisible();
+      // Stop when the scroller can't advance any further.
+      if (scroller.scrollTop === lastScrollTop) break;
+      lastScrollTop = scroller.scrollTop;
+      if (pos >= scroller.scrollHeight) break;
+      pos += step;
+    }
+    // Final pass at the very bottom to catch the last screenful.
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
+    await sleep(250);
+    collectVisible();
+    // Be a good citizen — return the user's view to the top.
+    scroller.scrollTo({ top: 0, behavior: 'auto' });
+
+    // Reassemble visual prompts from the ordered block texts.
+    const texts = Array.from(collected.values());
+    const visuals: string[] = [];
+    const START = '[visual prompt';
+
+    // A visual prompt ENDS at the first block containing the closing ']'. We
+    // terminate on the first ']' rather than balancing bracket counts because:
+    //   - it handles the common single-block case (the marker block already
+    //     holds the ']' → the entry is complete immediately), and
+    //   - it is robust to literal '[' or ']' INSIDE the description text
+    //     (e.g. "arr[i]"): a balanced-depth counter would miscount those, but
+    //     "first closing bracket wins" still ends the entry correctly.
+    // Two safety rails stop a prompt whose ']' was never captured (split off-
+    // screen, or simply absent) from swallowing the rest of the page:
+    //   - a new '[visual prompt' marker ends the current entry, and
+    //   - MAX_CONTINUATION caps how many follow-on blocks we will absorb.
+    const MAX_CONTINUATION = 40;
+
+    for (let i = 0; i < texts.length; i++) {
+      const text = texts[i];
+      if (!text) continue;
+      if (!text.toLowerCase().startsWith(START)) continue;
+
+      let combined = text;
+      let j = i;
+      // If the opening block already closes the bracket, it's a complete
+      // single-block prompt and we accumulate nothing.
+      if (!text.includes(']')) {
+        while (j + 1 < texts.length && j - i < MAX_CONTINUATION) {
+          const next = texts[j + 1];
+          // A new visual prompt starting means this one was unterminated; stop
+          // before it so we don't swallow the next entry.
+          if (next.toLowerCase().startsWith(START)) break;
+          j++;
+          combined += '\n' + next;
+          if (next.includes(']')) break; // closing bracket reached
+        }
+      }
+      visuals.push(combined.trim());
+      i = j; // resume after the consumed group
+    }
+
+    return visuals;
   }
 
   function getEditableLeaf(block: HTMLElement): HTMLElement | null {

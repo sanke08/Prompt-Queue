@@ -19,6 +19,7 @@ import {
   ExternalLink,
   Activity,
   BookOpen,
+  ScanLine,
 } from "lucide-react";
 import type { QueueState, Task, AIPlatform } from "../utils/messaging";
 import {
@@ -172,6 +173,8 @@ const App: React.FC = () => {
   const [showNotionInput, setShowNotionInput] = useState(false);
   const [notionUrlInput, setNotionUrlInput] = useState("");
   const [notionError, setNotionError] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<{
     id: number;
     url: string;
@@ -278,6 +281,9 @@ const App: React.FC = () => {
     await sendMessageToBackground({ type: "SWITCH_PROJECT", payload: id });
     setIsProjectMenuOpen(false);
     setSelectedIndex(0);
+    // The scan result belongs to the project that was active when it ran; clear
+    // it so a stale "Added N" message doesn't carry over to the new project.
+    setScanResult(null);
   }, []);
 
   const handleDeleteProject = React.useCallback(
@@ -342,6 +348,35 @@ const App: React.FC = () => {
       payload: { id: activeProject.id, notionPageUrl: '' },
     });
   }, [activeProject?.id]);
+
+  const handleScanVisuals = React.useCallback(async () => {
+    if (!activeProject?.notionPageUrl || isScanning) return;
+    setIsScanning(true);
+    setScanResult(null);
+    try {
+      const res = await sendMessageToBackground({
+        type: 'NOTION_SCAN_VISUALS',
+        payload: { projectId: activeProject.id },
+      });
+      if (res?.success) {
+        const added = res.added ?? 0;
+        const skipped = res.skipped ?? 0;
+        setScanResult(
+          added === 0
+            ? skipped > 0
+              ? `No new visuals (${skipped} already queued)`
+              : 'No visuals found'
+            : `Added ${added} visual${added === 1 ? '' : 's'}${skipped ? ` (${skipped} skipped)` : ''}`,
+        );
+      } else {
+        setScanResult(res?.error ?? 'Scan failed');
+      }
+    } catch (err: any) {
+      setScanResult(err?.message ?? 'Scan failed');
+    } finally {
+      setIsScanning(false);
+    }
+  }, [activeProject?.id, activeProject?.notionPageUrl, isScanning]);
 
   // Auto-focus prompt input on mount
   useEffect(() => {
@@ -867,12 +902,34 @@ const App: React.FC = () => {
             </div>
 
             {activeProject?.notionPageUrl && (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-mono-sidebar border border-mono rounded-lg">
-                <BookOpen className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
-                <span className="flex-1 text-[8px] font-bold text-mono-primary tracking-tight truncate" title={activeProject.notionPageUrl}>
-                  {activeProject.notionPageUrl}
-                </span>
-              </div>
+              <>
+                <div className="flex items-center gap-1.5 px-2 py-1 bg-mono-sidebar border border-mono rounded-lg">
+                  <BookOpen className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                  <span className="flex-1 text-[8px] font-bold text-mono-primary tracking-tight truncate" title={activeProject.notionPageUrl}>
+                    {activeProject.notionPageUrl}
+                  </span>
+                </div>
+                <button
+                  onClick={handleScanVisuals}
+                  disabled={isScanning}
+                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-mono-sidebar border border-mono text-mono-secondary hover:border-white hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  title="Read every [VISUAL PROMPT ...] block from the Notion page and add them to the queue"
+                >
+                  {isScanning ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <ScanLine className="w-3 h-3" />
+                  )}
+                  <span className="text-[9px] font-black uppercase tracking-tighter">
+                    {isScanning ? 'Scanning…' : 'Scan Visuals'}
+                  </span>
+                </button>
+                {scanResult && (
+                  <p className="text-[8px] font-bold text-mono-secondary px-0.5 leading-relaxed">
+                    {scanResult}
+                  </p>
+                )}
+              </>
             )}
 
             {showNotionInput && !activeProject?.notionPageUrl && (

@@ -1,4 +1,5 @@
 import { QueueManager } from "./queueManager";
+import { ensureNotionTab, injectNotionScript } from "./notionTab";
 import { sendMessageToTab } from "../utils/messaging";
 import type { AIPlatform } from "../utils/messaging";
 
@@ -286,8 +287,8 @@ export class Worker {
         return { success: false, error: 'Could not produce a usable image (no data URL)' };
       }
 
-      // Find or open the Notion tab.
-      const notionTab = await this.ensureNotionTab(notionPageUrl);
+      // Find or open the Notion tab (shared with the scan flow — see notionTab.ts).
+      const notionTab = await ensureNotionTab(notionPageUrl);
       if (!notionTab?.id) {
         return { success: false, error: 'Could not open Notion tab' };
       }
@@ -295,25 +296,11 @@ export class Worker {
       // Wait for the Notion page to settle after navigation/focus.
       await new Promise((r) => setTimeout(r, 2000));
 
-      // Inject the notion content script programmatically. This handles tabs
-      // that were already open before the extension was installed/reloaded —
-      // manifest content_scripts only auto-inject into tabs opened after load.
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: notionTab.id },
-          files: ['notion.js'],
-        });
-        // Small pause for the script to register its message listener
-        await new Promise((r) => setTimeout(r, 300));
-      } catch (injectErr: any) {
-        // A re-injection on an already-injected tab is harmless. But if the tab
-        // is gone / inaccessible, the message below will never be received — so
-        // surface those cases instead of hanging on a retry timeout.
-        const msg = String(injectErr?.message ?? injectErr);
-        if (msg.includes('No tab') || msg.includes('Cannot access') || msg.includes('closed')) {
-          return { success: false, error: `Notion tab unavailable: ${msg}` };
-        }
-        // Otherwise assume the manifest-declared content script is already live.
+      // Inject the notion content script (no-op if already injected; returns an
+      // error string only if the tab is gone/inaccessible).
+      const injectErr = await injectNotionScript(notionTab.id);
+      if (injectErr) {
+        return { success: false, error: injectErr };
       }
 
       // Send ONLY the self-contained data URL — the Notion script must not
@@ -341,29 +328,6 @@ export class Worker {
       console.error('[Worker] pasteImageToNotion error:', err);
       return { success: false, error: err.message };
     }
-  }
-
-  private async ensureNotionTab(notionPageUrl: string): Promise<chrome.tabs.Tab | null> {
-    const urlBase = notionPageUrl.split('?')[0].replace(/\/$/, '');
-    const allTabs = await chrome.tabs.query({});
-    const existing = allTabs.find((t) => {
-      if (!t.url) return false;
-      return t.url.split('?')[0].replace(/\/$/, '') === urlBase;
-    });
-
-    if (existing) {
-      await chrome.tabs.update(existing.id!, { active: true });
-      if (existing.windowId) {
-        await chrome.windows.update(existing.windowId, { focused: true });
-      }
-      return this.waitForTabComplete(existing.id!);
-    }
-
-    const tab = await chrome.tabs.create({ url: notionPageUrl, active: true });
-    if (tab.windowId) {
-      await chrome.windows.update(tab.windowId, { focused: true });
-    }
-    return this.waitForTabComplete(tab.id!);
   }
 
   private sendCompletionNotification(projectName: string) {

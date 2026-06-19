@@ -129,7 +129,12 @@ export type MessageType =
   // Background -> notion tab: find prompt text and insert image above it.
   | { type: 'NOTION_PASTE_IMAGE'; payload: { prompt: string; imageDataUrl?: string; imageSrc?: string } }
   // Notion tab -> background: result of the paste attempt.
-  | { type: 'NOTION_PASTE_RESULT'; payload: { success: boolean; error?: string } };
+  | { type: 'NOTION_PASTE_RESULT'; payload: { success: boolean; error?: string } }
+  // Popup -> background: open the linked Notion page, read every [VISUAL PROMPT ...]
+  // block, and add each one to the active project's queue.
+  | { type: 'NOTION_SCAN_VISUALS'; payload: { projectId: string } }
+  // Background -> notion tab: enumerate all visual-prompt blocks and return them.
+  | { type: 'NOTION_EXTRACT_VISUALS' };
 
 export const sendMessageToBackground = async (message: MessageType, retries = 3): Promise<any> => {
   console.log('[Messaging] Sending to Background:', message);

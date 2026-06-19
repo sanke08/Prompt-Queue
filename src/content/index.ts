@@ -161,13 +161,28 @@ async function handleExecutePrompt(prompt: string) {
       return { success: false, error: `Could not find input box on ${adapter.name}. Please ensure you are logged in.` };
     }
 
-    // 2. Check if input is empty to avoid overwriting user's active typing
-    const currentText = (input as any).innerText || (input as any).value || "";
-    if (currentText.trim().length > 0) {
+    // 2. Avoid overwriting text the USER is actively typing — but NOT our own
+    //    leftover prompt. A previous attempt may have set the value without it
+    //    being sent/cleared (e.g. the send click didn't land); in that case the
+    //    box holds OUR prompt and we should just (re)send it, not bail and retry
+    //    forever. So only treat the box as "busy" when it contains text that is
+    //    neither empty nor the prompt we're about to inject.
+    const currentText = ((input as any).innerText || (input as any).value || "").trim();
+    // Rich editors (ProseMirror/Quill/rich-textarea) normalize whitespace and
+    // newlines when rendering, so compare with whitespace collapsed rather than
+    // requiring an exact byte match against the prompt we sent.
+    const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
+    const isOurOwnPrompt = normalize(currentText) === normalize(prompt);
+    if (currentText.length > 0 && !isOurOwnPrompt) {
       return { success: false, error: "Input is not empty (User may be typing). Retrying..." };
     }
 
-    adapter.setInputValue(input, prompt);
+    // Only re-inject when the box isn't already holding exactly our prompt;
+    // re-setting identical text can retrigger the framework's input handlers
+    // and clobber the editor's caret/state on some platforms.
+    if (!isOurOwnPrompt) {
+      adapter.setInputValue(input, prompt);
+    }
 
     // Delay to let the framework pick up the value
     await new Promise(r => setTimeout(r, 800));
