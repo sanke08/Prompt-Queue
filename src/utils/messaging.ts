@@ -105,7 +105,9 @@ export type MessageType =
   | { type: 'RESUME_QUEUE' }
   | { type: 'GET_QUEUE_STATE' }
   | { type: 'QUEUE_STATE_UPDATED'; payload: QueueState }
-  | { type: 'EXECUTE_PROMPT'; payload: string }
+  // captureImage: true tells the content script to also capture the generated
+  // image in the same execution — image is bound to this prompt, no separate roundtrip.
+  | { type: 'EXECUTE_PROMPT'; payload: { prompt: string; captureImage: boolean } }
   | { type: 'PROMPT_COMPLETED'; payload: { success: boolean; error?: string; response?: string } }
   | { type: 'PING' }
   | { type: 'CREATE_PROJECT'; payload: { name: string } }
@@ -125,7 +127,9 @@ export type MessageType =
   // Background -> side panel: a selection was just added; scroll to it.
   | { type: 'SELECTION_ADDED' }
   // Background -> AI tab: capture the most recently generated image.
-  | { type: 'CAPTURE_IMAGE' }
+  // imageCountBefore: how many qualifying images were on the page BEFORE the
+  // prompt was sent — the script waits until count exceeds this.
+  | { type: 'CAPTURE_IMAGE'; payload: { imageCountBefore: number } }
   // Background -> notion tab: find prompt text and insert image above it.
   | { type: 'NOTION_PASTE_IMAGE'; payload: { prompt: string; imageDataUrl?: string; imageSrc?: string } }
   // Notion tab -> background: result of the paste attempt.

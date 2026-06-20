@@ -1,61 +1,71 @@
 import { QueueManager } from "./queueManager";
 import { ensureNotionTab, injectNotionScript } from "./notionTab";
 import { sendMessageToTab } from "../utils/messaging";
-import type { AIPlatform } from "../utils/messaging";
 
-// Sent from the AI content script back to background after capturing an image.
-interface ImageCaptureResult {
-  success: boolean;
-  imageDataUrl?: string; // data URL — same-origin canvas capture (e.g. Gemini)
-  imageSrc?: string;     // original CDN URL — cross-origin (e.g. ChatGPT/DALL-E)
-  error?: string;
-}
 
 export class Worker {
   private queueManager: QueueManager;
-  private processingPlatforms = new Set<AIPlatform>();
+  // Tracks which projects currently have an active processing loop.
+  private processingProjects = new Set<string>();
+  // Dedicated tab per project — each project owns its own browser tab so
+  // multiple projects on the same platform can run in parallel.
+  private projectTabMap = new Map<string, number>();
+  // Serializes all Notion paste operations across parallel projects.
+  // The OS clipboard and the shared Notion tab are both global resources —
+  // two concurrent pastes would race and the wrong image lands on the wrong page.
+  private notionPasteMutex: Promise<void> = Promise.resolve();
 
   constructor(queueManager: QueueManager) {
     this.queueManager = queueManager;
   }
 
   async start() {
-    const platforms: AIPlatform[] = ["chatgpt", "gemini", "claude"];
-    for (const platform of platforms) {
-      if (!this.processingPlatforms.has(platform)) {
-        this.processPlatformQueue(platform);
+    await this.queueManager.ready();
+    const { projects } = this.queueManager.getState();
+    for (const project of projects) {
+      if (project.isRunning && !project.isPaused && !this.processingProjects.has(project.id)) {
+        this.processProjectQueue(project.id);
       }
     }
   }
 
-  private async processPlatformQueue(platform: AIPlatform) {
-    if (this.processingPlatforms.has(platform)) return;
-    this.processingPlatforms.add(platform);
+  private async processProjectQueue(projectId: string) {
+    if (this.processingProjects.has(projectId)) return;
+    this.processingProjects.add(projectId);
 
-    // Guarantee state is loaded before we start reading the queue.
     await this.queueManager.ready();
+    console.log(`[Worker] Started queue for project ${projectId}`);
 
-    console.log(`[Worker] Started queue for ${platform}`);
+    // A task left as 'running' means the service worker was killed mid-execution.
+    // Reset it to 'pending' so this loop retries it rather than skipping it forever.
+    const staleTasks = this.queueManager.getState().tasks.filter(
+      t => t.projectId === projectId && t.status === 'running'
+    );
+    for (const t of staleTasks) {
+      await this.queueManager.updateTask(t.id, { status: 'pending', statusDetail: 'Retrying after interruption' });
+    }
 
     try {
       while (true) {
-        const next =
-          await this.queueManager.getNextPendingTaskForPlatform(platform);
+        const state = this.queueManager.getState();
+        const project = state.projects.find(p => p.id === projectId);
+        if (!project?.isRunning || project.isPaused) break;
 
-        if (!next) {
-          console.log(`[Worker] No more tasks for ${platform}`);
+        const task = state.tasks.find(
+          t => t.projectId === projectId && t.status === 'pending'
+        );
+        if (!task) {
+          console.log(`[Worker] No more tasks for project ${projectId}`);
           break;
         }
 
-        const { task, project } = next;
         await this.executeTask(task, project);
-
-        // Small delay between tasks
         await new Promise((r) => setTimeout(r, 1500));
       }
     } finally {
-      this.processingPlatforms.delete(platform);
-      console.log(`[Worker] Stopped queue for ${platform}`);
+      this.processingProjects.delete(projectId);
+      this.projectTabMap.delete(projectId);
+      console.log(`[Worker] Stopped queue for project ${projectId}`);
     }
   }
 
@@ -83,7 +93,7 @@ export class Worker {
       });
 
       const effectiveUrl = project?.targetUrl;
-      const tab = await this.ensureAITab(task.platform, effectiveUrl);
+      const tab = await this.ensureProjectTab(project.id, task.platform, effectiveUrl);
       const tabId = tab.id;
       if (tabId === undefined) throw new Error("No AI chat tab found");
 
@@ -97,6 +107,14 @@ export class Worker {
         // Extra buffer for content script to attach
         await new Promise((r) => setTimeout(r, 2000));
       }
+
+      // Does this project need image capture? Decide now so we pass captureImage
+      // to EXECUTE_PROMPT — the content script will snapshot the image count
+      // atomically before sending the prompt, eliminating any race window.
+      const projectForCapture = this.queueManager
+        .getState()
+        .projects.find((p) => p.id === project.id);
+      const needsImage = !!projectForCapture?.notionPageUrl;
 
       // 2. Pre-Injection Check
       const stillRunning = this.queueManager
@@ -119,7 +137,7 @@ export class Worker {
       while (executeRetries > 0) {
         response = await sendMessageToTab(tabId, {
           type: "EXECUTE_PROMPT",
-          payload: task.prompt,
+          payload: { prompt: task.prompt, captureImage: needsImage },
         });
 
         if (
@@ -153,8 +171,9 @@ export class Worker {
           statusDetail: "Waiting for AI response...",
         });
 
-        // The content script will handle waiting for completion
-        // but we can add an extra wait here for safety
+        // waitForCompletion runs inside the content script (observer.ts) and
+        // resolves only when the platform stops generating. The flat 2s sleep
+        // here is just a settle buffer after that signal arrives.
         await new Promise((r) => setTimeout(r, 2000));
 
         await this.queueManager.updateTask(task.id, {
@@ -162,11 +181,7 @@ export class Worker {
           statusDetail: "Completed",
         });
 
-        if (
-          project &&
-          (!project.targetUrl ||
-            (project.targetUrl && this.isNewChatUrl(project.targetUrl)))
-        ) {
+        if (project && (!project.targetUrl || this.isNewChatUrl(project.targetUrl))) {
           await this.queueManager.updateTask(task.id, {
             statusDetail: "Capturing chat ID...",
           });
@@ -179,19 +194,23 @@ export class Worker {
           }
         }
 
-        // If this project has a Notion page set, try to capture the generated
-        // image from the AI tab and paste it into Notion above the prompt text.
+        // If an image was captured inline with EXECUTE_PROMPT, paste it to Notion.
+        // response.imageDataUrl / response.imageSrc are set by the content script
+        // only when captureImage=true was passed — guaranteed to be this prompt's image.
         const freshProject = this.queueManager
           .getState()
           .projects.find((p) => p.id === project.id);
-        if (freshProject?.notionPageUrl) {
+        if (freshProject?.notionPageUrl && (response.imageDataUrl || response.imageSrc)) {
           await this.queueManager.updateTask(task.id, {
-            statusDetail: "Capturing image for Notion...",
+            statusDetail: "Pasting image to Notion...",
           });
-          const notionResult = await this.pasteImageToNotion(
-            tabId,
-            task.prompt,
-            freshProject.notionPageUrl,
+          const notionResult = await this.withNotionMutex(() =>
+            this.pasteImageToNotion(
+              response.imageDataUrl,
+              response.imageSrc,
+              task.prompt,
+              freshProject.notionPageUrl!,
+            )
           );
           await this.queueManager.updateTask(task.id, {
             statusDetail: notionResult.success
@@ -232,36 +251,34 @@ export class Worker {
     }
   }
 
-  // Capture the most recently generated image from the AI tab (as a data URL),
-  // then open/focus the Notion page and instruct its content script to paste it.
+  private withNotionMutex<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.notionPasteMutex.then(() => fn());
+    this.notionPasteMutex = next.then(() => {}, () => {});
+    return next;
+  }
+
+  // Encode the image (already captured in the content script) and paste it into
+  // the correct Notion page. imageDataUrl/imageSrc come directly from the
+  // EXECUTE_PROMPT response — they are already bound to this specific prompt.
   private async pasteImageToNotion(
-    aiTabId: number,
+    imageDataUrl: string | undefined,
+    imageSrc: string | undefined,
     prompt: string,
     notionPageUrl: string,
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      // Ask the AI content script to grab the latest generated image.
-      const capture: ImageCaptureResult = await sendMessageToTab(
-        aiTabId,
-        { type: 'CAPTURE_IMAGE' },
-        3,
-      ).catch(() => ({ success: false, error: 'capture failed' }));
-
-      if (!capture.success || (!capture.imageDataUrl && !capture.imageSrc)) {
-        const msg = capture.error ?? 'No image found on AI page';
-        console.warn('[Worker] No image captured from AI tab:', msg);
-        return { success: false, error: msg };
+      if (!imageDataUrl && !imageSrc) {
+        return { success: false, error: 'No image data provided' };
       }
 
       // The Notion content script runs on the notion.so origin and CANNOT fetch
       // a cross-origin CDN URL (CORS). So we must always hand it a self-contained
-      // data: URL. If the AI tab gave us a raw src (cross-origin image like
+      // data: URL. If the content script gave us a raw src (cross-origin image like
       // ChatGPT/DALL-E on files.oaiusercontent.com), fetch + encode it HERE, in
       // the background service worker, where host_permissions bypass CORS.
-      let imageDataUrl = capture.imageDataUrl;
-      if (!imageDataUrl && capture.imageSrc) {
+      if (!imageDataUrl && imageSrc) {
         try {
-          const res = await fetch(capture.imageSrc);
+          const res = await fetch(imageSrc);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const blob = await res.blob();
           const arrayBuffer = await blob.arrayBuffer();
@@ -408,18 +425,19 @@ export class Worker {
     },
   };
 
-  private async ensureAITab(
+  private async ensureProjectTab(
+    projectId: string,
     platform: string,
     targetUrl?: string,
   ): Promise<chrome.tabs.Tab> {
     const config =
       Worker.PLATFORM_CONFIG[platform] || Worker.PLATFORM_CONFIG.chatgpt;
 
-    // 1. SPECIFIC LOCK: User wants to run in a specific pre-existing chat
+    // 1. SPECIFIC LOCK: project is pinned to a particular existing chat URL.
     if (targetUrl && !this.isNewChatUrl(targetUrl)) {
       const allTabs = await chrome.tabs.query({});
       const targetBase = targetUrl.split('?')[0].replace(/\/$/, '');
-      
+
       const matchingTab = allTabs.find(t => {
         if (!t.url) return false;
         const tabBase = t.url.split('?')[0].replace(/\/$/, '');
@@ -427,51 +445,50 @@ export class Worker {
       });
 
       if (matchingTab) {
-        await chrome.tabs.update(matchingTab.id!, { active: true });
-        if (matchingTab.windowId) {
-          await chrome.windows.update(matchingTab.windowId, { focused: true });
-        }
+        this.projectTabMap.set(projectId, matchingTab.id!);
         return this.waitForTabComplete(matchingTab.id!);
       }
 
-      // If specific lock tab not found, try any platform tab or create new
+      // Lock URL not found — navigate any platform tab not owned by another project, or open a new one.
+      // Reserve our slot in the map with a sentinel BEFORE any await so a concurrent
+      // coroutine for a different project sees it as owned and won't pick the same tab.
+      this.projectTabMap.set(projectId, -1);
       const platformTabsFound = await chrome.tabs.query({ url: config.patterns });
-      if (platformTabsFound.length > 0) {
-        const tab = platformTabsFound[0];
-        await chrome.tabs.update(tab.id!, { active: true, url: targetUrl });
-        if (tab.windowId) {
-          await chrome.windows.update(tab.windowId, { focused: true });
-        }
-        return this.waitForTabComplete(tab.id!);
+      const ownedTabIds = new Set(this.projectTabMap.values());
+      const freeTab = platformTabsFound.find(t => t.id !== undefined && !ownedTabIds.has(t.id!));
+      if (freeTab) {
+        this.projectTabMap.set(projectId, freeTab.id!);
+        await chrome.tabs.update(freeTab.id!, { url: targetUrl });
+        return this.waitForTabComplete(freeTab.id!);
       }
-      const tab = await chrome.tabs.create({ url: targetUrl, active: true });
-      if (tab.windowId) {
-        await chrome.windows.update(tab.windowId, { focused: true });
-      }
+      const tab = await chrome.tabs.create({ url: targetUrl, active: false });
+      this.projectTabMap.set(projectId, tab.id!);
       return this.waitForTabComplete(tab.id!);
     }
 
-    // 2. NO LOCK OR GENERIC LOCK: Must start a NEW chat session
-    const platformTabs = await chrome.tabs.query({ url: config.patterns });
-
-    // Try to find a tab that is ALREADY on a New Chat page (Clean and ready)
-    const cleanTab = platformTabs.find(
-      (t) => t.url && this.isNewChatUrl(t.url) && !this.isAuthUrl(t.url),
-    );
-
-    if (cleanTab) {
-      await chrome.tabs.update(cleanTab.id!, { active: true });
-      if (cleanTab.windowId) {
-        await chrome.windows.update(cleanTab.windowId, { focused: true });
+    // 2. NO LOCK — each project gets its own dedicated tab so parallel projects
+    //    on the same platform don't share a tab and stomp each other's prompts.
+    const existingTabId = this.projectTabMap.get(projectId);
+    if (existingTabId !== undefined) {
+      try {
+        const existing = await chrome.tabs.get(existingTabId);
+        const existingUrl = existing?.url ?? '';
+        const onCorrectPlatform = config.patterns.some(p => {
+          const base = p.replace(/\/?\*$/, '');
+          return existingUrl.startsWith(base + '/') || existingUrl === base;
+        });
+        if (existing && onCorrectPlatform && !this.isAuthUrl(existingUrl)) {
+          return this.waitForTabComplete(existingTabId);
+        }
+      } catch {
+        // Tab was closed — fall through to create a new one.
       }
-      return cleanTab;
+      this.projectTabMap.delete(projectId);
     }
 
-    // No clean tab found. Create a BRAND NEW tab to avoid hijacking user's existing chats.
-    const tab = await chrome.tabs.create({ url: config.defaultUrl, active: true });
-    if (tab.windowId) {
-      await chrome.windows.update(tab.windowId, { focused: true });
-    }
+    // Allocate a brand-new background tab for this project.
+    const tab = await chrome.tabs.create({ url: config.defaultUrl, active: false });
+    this.projectTabMap.set(projectId, tab.id!);
     return this.waitForTabComplete(tab.id!);
   }
 

@@ -18,7 +18,8 @@ console.log(`[Queue Automator] Content script loaded on: ${platform ?? 'unknown'
 chrome.runtime.onMessage.addListener((message: MessageType, _sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
   console.log('[Content] Received message:', message);
   if (message.type === 'EXECUTE_PROMPT') {
-    handleExecutePrompt(message.payload)
+    const { prompt, captureImage } = message.payload;
+    handleExecutePrompt(prompt, captureImage)
       .then(res => {
         console.log('[Content] Execution response:', res);
         sendResponse(res);
@@ -37,7 +38,8 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender: chrome.runt
   }
 
   if (message.type === 'CAPTURE_IMAGE') {
-    captureLatestImage()
+    const imageCountBefore = message.payload?.imageCountBefore ?? 0;
+    captureLatestImage(imageCountBefore)
       .then(res => sendResponse(res))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
@@ -86,26 +88,37 @@ document.addEventListener(
   true, // capture phase, so we see it before the page's own handlers
 );
 
-// Scan the page for the most recently generated image and return its src URL.
-// We intentionally return the URL only — the background worker fetches it,
-// avoiding the cross-origin SecurityError that canvas.toDataURL() throws for
-// images served from CDNs like files.oaiusercontent.com (ChatGPT/DALL-E).
-async function captureLatestImage(): Promise<{ success: boolean; imageDataUrl?: string; imageSrc?: string; error?: string }> {
+function getImageCandidates(): HTMLImageElement[] {
+  return Array.from(document.querySelectorAll<HTMLImageElement>('img')).filter((img) => {
+    if (!img.src || img.src.startsWith('data:image/svg')) return false;
+    if (img.naturalWidth < 100 || img.naturalHeight < 100) return false;
+    if (img.complete === false) return false;
+    if (img.naturalWidth <= 64 && img.naturalHeight <= 64) return false;
+    return true;
+  });
+}
+
+// Scan the page for a newly generated image.
+// imageCountBefore: how many qualifying images were on the page BEFORE the
+// prompt was sent. We poll until a new one appears, so we never capture a
+// leftover image from the previous prompt.
+async function captureLatestImage(imageCountBefore = 0): Promise<{ success: boolean; imageDataUrl?: string; imageSrc?: string; error?: string }> {
   try {
-    const imgs = Array.from(document.querySelectorAll<HTMLImageElement>('img'));
+    // Wait up to 90s for a new image to appear beyond the baseline count.
+    const TIMEOUT = 90_000;
+    const POLL = 1_000;
+    const deadline = Date.now() + TIMEOUT;
 
-    const candidates = imgs.filter((img) => {
-      if (!img.src || img.src.startsWith('data:image/svg')) return false;
-      if (img.naturalWidth < 100 || img.naturalHeight < 100) return false;
-      if (img.complete === false) return false;
-      if (img.naturalWidth <= 64 && img.naturalHeight <= 64) return false;
-      return true;
-    });
-
-    if (candidates.length === 0) {
-      return { success: false, error: 'No generated image found on page' };
+    let candidates = getImageCandidates();
+    while (candidates.length <= imageCountBefore) {
+      if (Date.now() > deadline) {
+        return { success: false, error: 'Timed out waiting for a new generated image' };
+      }
+      await new Promise(r => setTimeout(r, POLL));
+      candidates = getImageCandidates();
     }
 
+    // Pick the newest image — last in document order.
     const img = candidates[candidates.length - 1];
 
     // Try same-origin canvas capture first (works for Gemini which serves
@@ -133,20 +146,28 @@ async function captureLatestImage(): Promise<{ success: boolean; imageDataUrl?: 
   }
 }
 
-async function handleExecutePrompt(prompt: string) {
+async function handleExecutePrompt(
+  prompt: string,
+  captureImage = false,
+): Promise<{ success: boolean; error?: string; imageDataUrl?: string; imageSrc?: string }> {
   if (!adapter) {
     return { success: false, error: 'No adapter found for this platform' };
   }
 
   try {
+    // Snapshot image count NOW — before injecting the prompt — so we can
+    // identify the image that belongs specifically to this prompt later.
+    // This must happen before send() so there is zero ambiguity.
+    const imageCountBefore = captureImage ? getImageCandidates().length : 0;
+
     // 1. Wait for input box to appear (SPAs can be slow)
     let input: HTMLElement | null = null;
     let retries = 30; // 15 seconds total
-    
+
     while (retries > 0) {
       input = adapter.findInput();
       if (input) break;
-      
+
       // Check for Sign-in buttons while waiting
       const isSignedOut = !!document.querySelector('a[href*="accounts.google.com"], [href*="login"], [href*="sign-in"], .sign-in-button');
       if (isSignedOut && !document.querySelector('rich-textarea, .ql-editor, textarea')) {
@@ -197,6 +218,14 @@ async function handleExecutePrompt(prompt: string) {
 
     // Wait for completion
     await waitForCompletion(adapter);
+
+    // If the background wants an image, capture it now — in the same execution
+    // context, using the baseline we snapshotted before sending. This guarantees
+    // the image belongs to THIS prompt, not any previous one.
+    if (captureImage) {
+      const imageResult = await captureLatestImage(imageCountBefore);
+      return imageResult;
+    }
 
     return { success: true };
   } catch (err: any) {
